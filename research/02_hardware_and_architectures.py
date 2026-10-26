@@ -108,7 +108,7 @@ plt.tight_layout()
 # ## The architectures
 #
 # Two of them copy what the big players published (details and references in
-# [`docs/SOA.md`](../docs/SOA.md)):
+# [`SOA.md`](SOA.md)):
 #
 # | arch | structure | streaming state | why try it |
 # |---|---|---|---|

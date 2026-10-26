@@ -19,7 +19,7 @@ middle point ~16 tiles by the cost model below):
                last 16 tokens (1 s) with a learned relative-position bias, FFN 2d. State: the
                key/value cache.
 
-Cost model (see notebooks/02_hardware_and_architectures): the chip streams weights from the
+Cost model (see research/02_hardware_and_architectures): the chip streams weights from the
 QSPI Pmod every output step; the state either lives in on-chip flip-flops (gru, mingru) or in
 the Pmod's PSRAM (tcn history, transformer KV cache), in which case only a working set stays
 on chip and the state traffic is added to the QSPI budget.
@@ -202,7 +202,7 @@ class TransformerNet(nn.Module):
 
 
 class AppleDNN(nn.Module):
-    """Apple's 2017 "Hey Siri" first-stage shape [docs/SOA.md A1]: a 5-hidden-layer sigmoid DNN
+    """Apple's 2017 "Hey Siri" first-stage shape [research/SOA.md A1]: a 5-hidden-layer sigmoid DNN
     over the last 20 frames (0.32 s here; Apple: 20 x 10 ms), evaluated every frame. Apple
     predicts ~20 phonetic states and scores them with an HMM; here the output is the keyword
     logit directly (end-to-end, as in Apple's 2023 system). The 20-frame history sits in
@@ -231,7 +231,7 @@ class AppleDNN(nn.Module):
 
 
 class SVDFLayer(nn.Module):
-    """Rank-1 SVDF (Google, [docs/SOA.md G2]): per node a feature filter (linear over the input)
+    """Rank-1 SVDF (Google, [research/SOA.md G2]): per node a feature filter (linear over the input)
     and a time filter over that node's last T feature-filter outputs, then ReLU."""
 
     def __init__(self, n_in, nodes, T):

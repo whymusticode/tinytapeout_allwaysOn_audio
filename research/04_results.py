@@ -126,7 +126,7 @@ if len(df):
 #
 # The big players run the always-on detector at a **high-recall** point and let a bigger
 # model on the host reject false triggers. Google's DSP first stage on TV audio: 0.5 FA/h at
-# 4.1% misses, up to 10 FA/h at 1.2% misses (docs/SOA.md §3.1). So the question per model is:
+# 4.1% misses, up to 10 FA/h at 1.2% misses (research/SOA.md §3.1). So the question per model is:
 # **at a 5% (or 10%) miss rate, how many false alarms per hour does it pass to the host?**
 # Real columns use real speakers and the real streams (106 h).
 

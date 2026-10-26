@@ -19,4 +19,6 @@ test/unit/sim_build/
 test/unit/results.xml
 test/unit/__pycache__/
 *.pyc
-notebooks/.ipynb_checkpoints/
+research/.ipynb_checkpoints/
+
+notes.md # personal notes to remember where things go
