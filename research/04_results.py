@@ -37,12 +37,18 @@
 # * `fa_real_ami@1.0`: false alarms/h on **86 h of real meetings** at that threshold. The
 #   simulator is calibrated if this is ≈ 1.
 # * `frr_real@real1`: missed real keywords with the threshold set on the *real* streams at
-#   1 FA/h. **This is the number that matters**: real speakers, real false-alarm rate.
+#   1 FA/h. A secondary check on how well the simulator predicts reality.
+#
+# **Deciding metric (since 2026-10-26): the simulated holdout.** Choices are made on
+# `frr_syn@…` / `fa_sim@…`: held-out TTS voices, held-out whole voice models, held-out text,
+# rooms and ambience. Real-data columns sit next to them as a simulator-vs-reality check.
+# This early, real-data numbers mostly measure simulator gaps, not model quality.
 #
 # **Status log** (newest first)
 #
 # | date | what | outcome |
 # |---|---|---|
+# | 2026-10-26 | Recipe v3: 30 Piper voice models (multi-speaker, accents, emotional, 23 single voices, 6 held out whole) for keywords, near-misses and conversation; 50/50 keyword vs non-keyword batches; decisions on the simulated holdout | rendering + rebuilding, then the ladder (`data/results/arch_v3`) |
 # | 2026-10-26 | Recurrent models: stateful training (each window preceded by 1.6 s of other audio) + keyword windows scored with preceding context | without it the GRU state drifted on long streams; minGRU dropped (didn't learn, see 02) |
 # | 2026-10-26 | GPU (ROCm) trainer; GRU / TCN / transformer × 5 sizes (4× params apart, middle ≈ 16 tiles); early stopping on a simulator holdout split from the test half | running, telescope first |
 # | 2026-10-26 | Training cache: 16 mixes per keyword clip (was 2), ±10% speed | fixed the overfitting that made long runs worse |
@@ -56,7 +62,7 @@ import numpy as np
 
 from nbutil import ARCH_COLOR, ARCH_ORDER, TILE_BUDGET, load_runs, progress, table
 
-runs = load_runs()
+runs = load_runs("arch_v3")
 df = table(runs)
 progress()
 pd_opts = {"display.width": 250, "display.max_columns": 30, "display.precision": 3}
@@ -97,8 +103,8 @@ def size_plot(metric, title):
 
 
 if len(df):
-    size_plot("frr_real@real1", "missed REAL keywords @ 1 real FA/h")
-    size_plot("frr_syn@1.0", "missed TTS keywords @ 1 sim FA/h")
+    size_plot("frr_syn@1.0", "missed held-out TTS keywords @ 1 sim FA/h (deciding metric)")
+    size_plot("frr_real@real1", "missed REAL keywords @ 1 real FA/h (simulator check)")
 
 # %% [markdown]
 # ## The benefit of 16 tiles
@@ -115,7 +121,7 @@ if len(df):
             d = ok[(ok["slug"] == w) & (ok["tiles"] <= budget)]
             if d.empty:
                 continue
-            b = d.loc[d["frr_real@real1"].idxmin()]
+            b = d.loc[d["frr_syn@1.0"].idxmin()]
             rows.append({"word": w, "tile budget": "any" if budget == 999 else budget, "best arch": b["arch"],
                          "params": int(b["params"]), "tiles": b["tiles"], "frr_real@real1": round(b["frr_real@real1"], 3),
                          "frr_syn@1.0": round(b["frr_syn@1.0"], 3)})

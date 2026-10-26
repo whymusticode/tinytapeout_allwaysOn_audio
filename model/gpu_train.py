@@ -46,7 +46,7 @@ from train import CACHE, POS_LAST, REFRACTORY, WARMUP, count_fa, has_word, norm_
 
 ROOT = Path(__file__).resolve().parent.parent
 DEV = "cuda"
-BATCH, POS_FRAC = 512, 0.25
+BATCH, POS_FRAC = 512, 0.5  # 50/50 keyword vs not-keyword (h1 / h0) per batch
 LR, WD, WARM_STEPS, MAX_STEPS = 2e-3, 1e-2, 300, 8000
 VAL_EVERY, PATIENCE = 250, 8
 MINE_EVERY, MINE_POOL, MINE_KEEP, MINE_FRAC = 500, 32768, 4096, 0.3

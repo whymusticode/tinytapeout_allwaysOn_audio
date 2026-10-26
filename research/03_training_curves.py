@@ -48,7 +48,7 @@ import numpy as np
 from nbutil import ARCH_COLOR, ARCH_ORDER, load_runs, progress
 
 progress()
-runs = load_runs()
+runs = load_runs("arch_v3")
 words = sorted({r["slug"] for r in runs})
 print(f"\n{len(runs)} finished runs; words: {words}")
 

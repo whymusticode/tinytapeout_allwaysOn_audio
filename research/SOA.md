@@ -220,6 +220,67 @@ The deciding numbers:
   accuracy those tiles would buy. Notebook 04 measures accuracy vs tiles.
 - Power, which we can't measure until silicon or an FPGA run.
 
+## 9. Enrollment: what the "say it 3–5 times" step does
+
+In both Apple and Google, the user's samples train a **speaker verifier**, not the wake-word
+detector. The detector stays speaker-independent and the voice check is a later stage of the
+cascade.
+
+### Apple, "Personalized Hey Siri" [A3] (stated)
+
+**Enrollment**
+- **Explicit:** 5 phrases: "Hey Siri" ×3, "Hey Siri, how is the weather today?", "Hey Siri,
+  it's me."
+- **Implicit:** accepted triggers are added over time; the profile grows from 5 to **40
+  speaker vectors**.
+
+**Model**
+- **Features:** the "Hey Siri" detector's own HMM-state alignment averages MFCCs per state
+  into a supervector (initially 13 MFCC × 28 states = 364-d; later 26 × 17 = 442-d).
+- **Network:** a DNN maps the supervector to a **100-d speaker vector**. The best is 4 × 256
+  sigmoid layers + a 100-unit linear layer, 8-bit weights, trained on 16,000 users × ~150
+  utterances.
+- **Decision:** cosine score against every profile vector, averaged, then a threshold.
+
+**Placement:** runs after the speaker-independent detector, on device.
+
+**Results**
+- Speaker EER 4.3%.
+- End to end on 2,800 h of negatives: **1 FA/month, 5.2% FR, 3.2% imposter accept**.
+- Harder cases are large reverberant rooms and car/wind noise.
+
+### Google, Voice Match / GE2E [G6] (stated)
+
+**Model**
+- 3-layer LSTM, 128 units, projection 64, giving a **64-d d-vector**.
+- 40 log-mel at 10 ms. Only the **~800 ms keyword segment** found by the detector is passed in.
+- Trained on ~150M "OK Google" utterances from ~630k speakers.
+
+**Enrollment:** ~4.5–7.3 utterances per speaker in their evaluations.
+
+**Results:** EER 0.8–3% depending on keyword.
+
+**Placement:** Google's cascade [G1] puts it after the keyword detector; it cuts false
+alarms 5–10× for < 1% extra FRR.
+
+### Others
+
+Few-shot *keyword* personalisation (adapting the detector itself to a user's samples) is
+academic work so far, e.g.:
+- prototype classifiers on a feature encoder, Interspeech 2023 [P1];
+- small adapters on a pretrained KWS model [P2];
+- on-device self-learning on ultra-low-power sensors [P3].
+
+### What it means for us
+
+- **The chip stays speaker-independent.** That's how the big players' first stages work, and
+  it keeps the silicon simple.
+- **Enrollment and speaker verification belong on the host.** They run on the audio the chip
+  streams after a wake (`src/audio_ring.v`). The ~800 ms keyword segment Google uses is inside
+  our 2 s pre-roll.
+- **The samples are also valuable test data for us.** Each person's few recordings measure the
+  real FRR for that voice, which is what our simulator has to predict.
+
 ## References
 
 - [A1] Apple Machine Learning Research, "Hey Siri: An On-device DNN-powered Voice Trigger for Apple's Personal Assistant," 2017. https://machinelearning.apple.com/research/hey-siri
@@ -229,6 +290,11 @@ The deciding numbers:
 - [G2] R. Alvarez, H.-J. Park, "End-to-End Streaming Keyword Spotting," ICASSP 2019, arXiv:1812.02802. https://arxiv.org/abs/1812.02802
 - [G3] J. Lin, K. Kilgour, D. Roblek, M. Sharifi, "Training Keyword Spotters with Limited and Synthesized Speech Data," ICASSP 2020, arXiv:2002.01322. https://arxiv.org/abs/2002.01322
 - [G4] Google patent US 9,418,656, "Multi-stage hotword detection" (coarse first stage on a DSP). https://patents.google.com/patent/US9418656
+- [A3] Apple Machine Learning Research, "Personalized Hey Siri," Apr 2018. https://machinelearning.apple.com/research/personalized-hey-siri
+- [G6] L. Wan, Q. Wang, A. Papir, I. Lopez Moreno, "Generalized End-to-End Loss for Speaker Verification," ICASSP 2018, arXiv:1710.10467. https://arxiv.org/abs/1710.10467
+- [P1] M. Rusci, T. Tuytelaars, "Few-Shot Open-Set Learning for On-Device Customization of KeyWord Spotting Systems," Interspeech 2023. https://www.isca-archive.org/interspeech_2023/rusci23_interspeech.html
+- [P2] "Text-Aware Adapter for Few-Shot Keyword Spotting," arXiv:2412.18142. https://arxiv.org/abs/2412.18142
+- [P3] "Self-Learning for Personalized Keyword Spotting on Ultra-Low-Power Audio Sensors," arXiv:2408.12481. https://arxiv.org/abs/2408.12481
 - [G5] G. Chen, C. Parada, G. Heigold, "Small-footprint keyword spotting using deep neural networks," ICASSP 2014. https://www.clsp.jhu.edu/wp-content/uploads/2015/11/icassp2014_dnn_hotword.pdf
 - [Z1] M. Wu et al., "Monophone-based Background Modeling for Two-stage On-device Wake Word Detection," ICASSP 2018. https://www.amazon.science/publications/monophone-based-background-modeling-for-two-stage-on-device-wake-word-detection
 - [Z2] Amazon Alexa Voice Service, "Wake Word Verification." https://developer.amazon.com/docs/alexa-voice-service/enable-cloud-based-wake-word-verification.html ; launch post: https://developer.amazon.com/blogs/alexa/post/b136b3e7-0ba8-4589-aaf9-2a037fc4e9c9/cloud-based-wake-word-verification-improves-alexa-wake-word-accuracy-on-your-avs-products

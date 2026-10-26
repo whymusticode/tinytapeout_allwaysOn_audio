@@ -21,7 +21,7 @@ plt.rcParams.update({"figure.dpi": 110, "axes.grid": True, "grid.alpha": 0.3, "a
                      "axes.spines.right": False, "legend.frameon": False})
 
 
-def load_runs(sub="arch_v1"):
+def load_runs(sub="arch_v3"):
     """All finished runs in data/results/<sub>/ -> list of dicts (each with its curve)."""
     out = []
     for p in sorted((RES / sub).glob("*.json")):
@@ -44,7 +44,7 @@ def table(runs):
     return df.sort_values(["slug", "arch", "size_index"]).reset_index(drop=True)
 
 
-def progress(sub="arch_v1"):
+def progress(sub="arch_v3"):
     """Latest validation line of every running job (from the logs)."""
     for log in sorted((RES / sub).glob("*.log")):
         lines = [ln for ln in log.read_text().splitlines() if " step " in ln and "val_loss" in ln]

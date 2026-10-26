@@ -18,6 +18,8 @@ import sys
 from multiprocessing import Pool
 from pathlib import Path
 
+import json
+
 import numpy as np
 import yaml
 from scipy.signal import resample_poly
@@ -27,13 +29,40 @@ import store
 ROOT = Path(__file__).resolve().parent.parent
 PIPER_DIR = ROOT / "data" / "piper"
 OUT_DIR = ROOT / "data" / "synth"
-VOICES = [  # (model, weight): libritts dominates because it has ~900 speakers
-    ("en_US-libritts_r-medium", 0.55),
-    ("en_GB-vctk-medium", 0.2),
-    ("en_US-l2arctic-medium", 0.15),
-    ("en_US-arctic-medium", 0.1),
+# (model, weight). Multi-speaker models give speaker variety; single-speaker models give distinct
+# styles and accents (each gets an equal share of SINGLE_WEIGHT). model/data/piper_voices.sh.
+MULTI = [
+    ("en_US-libritts_r-medium", 0.28),  # ~900-2300 read-speech speakers
+    ("en_US-libritts-high", 0.14),  # a separately trained LibriTTS model: different timbre
+    ("en_GB-vctk-medium", 0.12),  # 109 British-accent speakers
+    ("en_US-l2arctic-medium", 0.06),  # 24 non-native speakers
+    ("en_US-arctic-medium", 0.04),
+    ("en_GB-aru-medium", 0.06),  # 12 regional British speakers
+    ("en_GB-semaine-medium", 0.06),  # 4 emotional styles (happy, angry, sad, neutral)
 ]
+SINGLE = [
+    "en_GB-alan-medium", "en_GB-alba-medium", "en_GB-cori-medium", "en_GB-jenny_dioco-medium",
+    "en_GB-northern_english_male-medium", "en_GB-southern_english_female-low", "en_US-amy-medium",
+    "en_US-bryce-medium", "en_US-danny-low", "en_US-hfc_female-medium", "en_US-hfc_male-medium",
+    "en_US-joe-medium", "en_US-john-medium", "en_US-kathleen-low", "en_US-kristin-medium",
+    "en_US-kusal-medium", "en_US-lessac-medium", "en_US-ljspeech-medium", "en_US-mike-medium",
+    "en_US-norman-medium", "en_US-reza_ibrahim-medium", "en_US-ryan-medium", "en_US-sam-medium",
+]
+SINGLE_WEIGHT = 0.24
+# Held-out test voices among the single-speaker models (whole voices never heard in training);
+# multi-speaker models hold out every TEST_EVERY-th speaker instead.
+TEST_SINGLE = {"en_GB-alba-medium", "en_GB-northern_english_male-medium", "en_US-hfc_female-medium",
+               "en_US-kristin-medium", "en_US-reza_ibrahim-medium", "en_US-ryan-medium"}
+VOICES = MULTI + [(v, SINGLE_WEIGHT / len(SINGLE)) for v in SINGLE]
 TEST_EVERY = 5
+LENGTH_SCALE, NOISE_SCALE, NOISE_W = (0.7, 1.4), (0.3, 1.1), (0.4, 1.3)  # prosody ranges
+
+
+def split_of(name, spk, n_speakers):
+    """'test' for held-out speakers / voices, else 'train'."""
+    if n_speakers > 1:
+        return "test" if spk % TEST_EVERY == 0 else "train"
+    return "test" if name in TEST_SINGLE else "train"
 
 
 def slug(phrase):
@@ -104,32 +133,39 @@ def _voice(name):
 
     _limit_ort_threads()
     if name not in _voices:
+        while len(_voices) >= 2:  # each loaded voice costs ~0.5-1 GB; keep a worker's footprint small
+            _voices.pop(next(iter(_voices)))
         _voices[name] = PiperVoice.load(str(PIPER_DIR / f"{name}.onnx"))
     return _voices[name]
 
 
+def _pick_voice(rng):
+    names = [v for v, _ in VOICES]
+    weights = np.array([w for _, w in VOICES])
+    return names[rng.choice(len(names), p=weights / weights.sum())]
+
+
 def render(job):
-    """job: (key, phrases, n, seed): n clips, each of a random phrase from `phrases`."""
+    """job: (key, phrases, n, seed): n clips, each of a random phrase from `phrases`, all from one
+    voice model drawn per job (random speaker and prosody per clip), so a worker loads one model."""
     key, phrases, n, seed = job
     from piper.config import SynthesisConfig
 
     rng = np.random.default_rng(seed)
-    names = [v for v, _ in VOICES]
-    weights = np.array([w for _, w in VOICES])
+    name = _pick_voice(rng)
+    voice = _voice(name)
     out = {"train": ([], []), "test": ([], [])}
     for _ in range(n):
         texts = text_variants(phrases[rng.integers(len(phrases))])
-        name = names[rng.choice(len(names), p=weights / weights.sum())]
-        voice = _voice(name)
         spk = int(rng.integers(voice.config.num_speakers))
-        split = "test" if spk % TEST_EVERY == 0 else "train"
-        ls = float(rng.uniform(0.75, 1.35))
-        ns = float(rng.uniform(0.4, 1.0))
-        nw = float(rng.uniform(0.5, 1.2))
+        split = split_of(name, spk, voice.config.num_speakers)
+        ls = float(rng.uniform(*LENGTH_SCALE))
+        ns = float(rng.uniform(*NOISE_SCALE))
+        nw = float(rng.uniform(*NOISE_W))
         text = texts[rng.integers(len(texts))]
         cfg = SynthesisConfig(speaker_id=spk, length_scale=ls, noise_scale=ns, noise_w_scale=nw)
         audio = np.concatenate([c.audio_int16_array for c in voice.synthesize(text, syn_config=cfg)])
-        audio = resample_poly(audio.astype(np.float32), 320, 441)  # 22050 -> 16000
+        audio = resample_poly(audio.astype(np.float32), 16000, voice.config.sample_rate)
         audio = trim(np.clip(audio, -32768, 32767).astype(np.int16), 16000)
         out[split][0].append(audio)
         out[split][1].append(f"{name}:{spk}:{ls:.3f}:{ns:.3f}:{nw:.3f}:{text}")
@@ -140,15 +176,16 @@ CONVO_DIR = ROOT / "data" / "synth_convo"
 
 
 def _random_speaker(rng, split):
-    """Pick a voice model and a speaker id belonging to `split` (every TEST_EVERY-th speaker is test)."""
-    names = [v for v, _ in VOICES]
-    weights = np.array([w for _, w in VOICES])
-    name = names[rng.choice(len(names), p=weights / weights.sum())]
-    voice = _voice(name)
+    """Pick a voice model that has speakers in `split`, and a speaker id from it (see split_of)."""
     while True:
-        spk = int(rng.integers(voice.config.num_speakers))
-        if (spk % TEST_EVERY == 0) == (split == "test"):
-            return name, voice, spk
+        name = _pick_voice(rng)
+        n = json.loads((PIPER_DIR / f"{name}.onnx.json").read_text()).get("num_speakers", 1)
+        if n == 1 and split_of(name, 0, 1) != split:
+            continue
+        while True:
+            spk = int(rng.integers(n))
+            if split_of(name, spk, n) == split:
+                return name, _voice(name), spk
 
 
 def render_convo(job):
@@ -161,14 +198,18 @@ def render_convo(job):
     rng = np.random.default_rng(seed)
     texts = store.load(ROOT / "data" / "text" / "utts")["text"]
     clips, meta = [], []
+    name, voice, _ = _random_speaker(rng, split)  # one voice model per shard, speakers vary within it
     for i in idx:
-        name, voice, spk = _random_speaker(rng, split)
-        ls, ns, nw = float(rng.uniform(0.7, 1.3)), float(rng.uniform(0.4, 1.0)), float(rng.uniform(0.5, 1.2))
+        while True:
+            spk = int(rng.integers(voice.config.num_speakers))
+            if split_of(name, spk, voice.config.num_speakers) == split:
+                break
+        ls, ns, nw = float(rng.uniform(*LENGTH_SCALE)), float(rng.uniform(*NOISE_SCALE)), float(rng.uniform(*NOISE_W))
         cfg = SynthesisConfig(speaker_id=spk, length_scale=ls, noise_scale=ns, noise_w_scale=nw)
         chunks = [c.audio_int16_array for c in voice.synthesize(str(texts[i]), syn_config=cfg)]
         if not chunks:
             continue
-        audio = resample_poly(np.concatenate(chunks).astype(np.float32), 320, 441)
+        audio = resample_poly(np.concatenate(chunks).astype(np.float32), 16000, voice.config.sample_rate)
         clips.append(trim(np.clip(audio, -32768, 32767).astype(np.int16), 16000))
         meta.append((int(i), f"{name}:{spk}:{ls:.3f}:{ns:.3f}:{nw:.3f}"))
     store.save(shard, audio=np.concatenate(clips), offsets=np.cumsum([0] + [len(c) for c in clips]),
@@ -198,7 +239,7 @@ def merge_shards(shards, out):
         shutil.rmtree(s)
 
 
-def main_convo(n_train, n_test, jobs, chunk=200):
+def main_convo(n_train, n_test, jobs, chunk=100):
     """Render n_train / n_test utterances from the train / test text split with train / test speakers."""
     import store
 
@@ -239,7 +280,7 @@ def main():
     ap.add_argument("--per-phrase", type=int, default=2000)
     ap.add_argument("--only", default="")
     ap.add_argument("--jobs", type=int, default=14)
-    ap.add_argument("--chunk", type=int, default=250)
+    ap.add_argument("--chunk", type=int, default=50)
     ap.add_argument("--negatives", action="store_true", help="render partial-phrase hard negatives")
     ap.add_argument("--convo", default="", help="TRAIN,TEST: render that many conversation utterances")
     ap.add_argument("--nearmiss", action="store_true", help="render data/text/nearmiss.json -> data/synth_near/")

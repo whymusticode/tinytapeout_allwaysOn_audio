@@ -45,6 +45,16 @@ def db(lo, hi, rng):
     return 10 ** (rng.uniform(lo, hi) / 20)
 
 
+_utt_text = None
+
+
+def utt_text(i):
+    global _utt_text
+    if _utt_text is None:
+        _utt_text = store.load(ROOT / "data" / "text" / "utts")["text"]
+    return _utt_text[i]
+
+
 def speed(x, r):
     """Play x at r times the speed (linear interpolation; r > 1 = faster and higher)."""
     return np.interp(np.arange(0, len(x) - 1, r), np.arange(len(x)), x).astype(np.float32)
@@ -54,9 +64,11 @@ class Mixer:
     def __init__(self, split):
         assert split in ("train", "simtest", "test")
         self.split = split
+        self.log = None  # set to a list to record what each call did (audio_lab annotations)
         # Memory-mapped: every worker process shares one copy in the page cache.
         bg = store.load(POOLS / f"bg_{'train' if split == 'train' else 'test'}")
         self.bg, self.bg_cat, self.n_cat = bg["audio"], np.array(bg["cat"]), len(bg["cats"])
+        self.cat_names = np.array(bg["cats"])
         self.cat_idx = [np.nonzero(self.bg_cat == c)[0] for c in range(self.n_cat)]
         r = store.load(POOLS / f"rir_{split}")
         self.rir, self.rir_off = r["audio"], np.array(r["offsets"])
@@ -65,25 +77,39 @@ class Mixer:
         else:
             c = store.load(ROOT / "data" / "synth_convo" / ("train" if split == "train" else "test"))
             self.utt_audio, self.utt_off = c["audio"], np.array(c["offsets"])
+            self.utt_ids, self.utt_meta = np.array(c["utt"]), c["meta"]
             contains = np.array(store.load(ROOT / "data" / "text" / "utts")["contains"])
             self.utt_contains = contains[np.array(c["utt"])]
 
     # --- building blocks ---
+
+    def note(self, **kw):
+        if self.log is not None:
+            self.log.append(kw)
 
     def _crop(self, rng, arr, i, n):
         s = rng.integers(0, arr.shape[1] - n + 1) if arr.shape[1] > n else 0
         c = arr[i, s : s + n].astype(np.float32) / 32768
         return np.pad(c, (0, n - len(c)))
 
-    def ambience(self, rng, n):
-        """Recorded noise / music / environments: 1-2 sources, equal weight per category."""
-        x = self._crop(rng, self.bg, rng.choice(self.cat_idx[rng.integers(self.n_cat)]), n)
-        if rng.random() < 0.3:
-            x = x + self._crop(rng, self.bg, rng.integers(len(self.bg)), n) * db(-15, 0, rng)
+    def ambience(self, rng, n, cat=None):
+        """Recorded noise / music / environments: 1-2 sources, equal weight per category.
+        cat: force one category (index into self.cat_names), single source."""
+        c = rng.integers(self.n_cat) if cat is None else cat
+        i = rng.choice(self.cat_idx[c])
+        x = self._crop(rng, self.bg, i, n)
+        self.note(what="ambience", category=str(self.cat_names[c]), item=int(i))
+        if cat is None and rng.random() < 0.3:
+            j = rng.integers(len(self.bg))
+            g = db(-15, 0, rng)
+            x = x + self._crop(rng, self.bg, j, n) * g
+            self.note(what="ambience", category=str(self.cat_names[self.bg_cat[j]]), item=int(j),
+                      level_db=round(20 * np.log10(g), 1))
         return x
 
     def room(self, rng):
         i = rng.integers(len(self.rir_off) - 1)
+        self._room_id = int(i)
         return np.asarray(self.rir[self.rir_off[i] : self.rir_off[i + 1]])
 
     def reverb(self, rng, x, h=None):
@@ -91,7 +117,7 @@ class Mixer:
         y = fftconvolve(x, h)[: len(x)]
         return y * (rms(x) / max(rms(y), 1e-9))
 
-    def placement(self, rng, d=None):
+    def placement(self, rng, d=None, muffled=None):
         """Where a talker is: distance, room response and muffling ("the muffler").
         -> dict for place(). Farther = quieter, more reverberant, duller."""
         d = float(np.exp(rng.uniform(*np.log(DIST_M)))) if d is None else d
@@ -102,11 +128,14 @@ class Mixer:
         tail = h - direct
         crit = rng.uniform(0.5, 1.5)  # critical distance of this room, m
         h = direct / max(np.abs(direct).max(), 1e-9) + tail / max(np.abs(direct).max(), 1e-9) * (d / crit)
-        if rng.random() < P_MUFFLED:
+        m = rng.random() < P_MUFFLED  # drawn even when forced, so random streams stay identical
+        if muffled if muffled is not None else m:
             fc = rng.uniform(500, 2000)
         else:  # air absorption and off-axis loss: duller with distance
             fc = float(np.clip(7000 * (REF_M / d) ** 0.35 * rng.uniform(0.8, 1.1), 2500, 7500))
-        return {"d": d, "h": h, "sos": butter(2, fc, fs=RATE, output="sos"), "gain": REF_M / d}
+        return {"d": d, "h": h, "sos": butter(2, fc, fs=RATE, output="sos"), "gain": REF_M / d,
+                "fc": round(fc), "muffled": bool(fc <= 2000), "crit_m": round(crit, 2), "room": self._room_id,
+                "room_kind": "real recorded room" if self.split == "test" else "simulated room"}
 
     def place(self, x, p):
         """Apply a placement to close-talk audio x. Output RMS = rms(x) * gain."""
@@ -117,6 +146,8 @@ class Mixer:
         """One TTS conversation utterance -> (float audio, packed contains bits)."""
         i = rng.integers(len(self.utt_off) - 1)
         a = self.utt_audio[self.utt_off[i] : self.utt_off[i + 1]].astype(np.float32) / 32768
+        if self.log is not None:
+            self.note(what="utterance", text=str(utt_text(self.utt_ids[i])), voice=str(self.utt_meta[i]))
         return a / rms(a), self.utt_contains[i]
 
     def conversation(self, rng, n):
@@ -124,10 +155,14 @@ class Mixer:
         their own distance (level) and room position. -> (audio, contains bits)."""
         contains = np.zeros(N_CONTAINS, np.uint8)
         if self.split == "test":  # a real talker (one per crop), placed at a distance like simulated ones
-            x = self._crop(rng, self.real_speech, rng.integers(len(self.real_speech)), n)
-            return self.place(x / rms(x), self.placement(rng)) * db(-4, 4, rng), contains
+            i = rng.integers(len(self.real_speech))
+            x = self._crop(rng, self.real_speech, i, n)
+            p = self.placement(rng)
+            self.note(what="real talker (MUSAN speech)", item=int(i), distance_m=round(p["d"], 1))
+            return self.place(x / rms(x), p) * db(-4, 4, rng), contains
         n_spk = rng.integers(1, 4)
         where = [self.placement(rng) for _ in range(n_spk)]  # each talker has a distance and a room spot
+        self.note(what="conversation", talkers=int(n_spk), distances_m=[round(w["d"], 1) for w in where])
         loud = [db(-4, 4, rng) for _ in range(n_spk)]  # some people talk louder
         x = np.zeros(n, np.float32)
         pos = -int(rng.integers(0, 2 * RATE))  # start mid-utterance
@@ -145,7 +180,9 @@ class Mixer:
         """A crowd: 3-6 distant talkers at once (cafe, open office, party)."""
         x = np.zeros(n, np.float32)
         contains = np.zeros(N_CONTAINS, np.uint8)
-        for _ in range(rng.integers(3, 7)):
+        k = rng.integers(3, 7)
+        self.note(what="crowd babble", conversations=int(k))
+        for _ in range(k):
             c, bits = self.conversation(rng, n)
             x += c * db(-6, 0, rng)
             contains |= bits
@@ -157,7 +194,9 @@ class Mixer:
         contains = np.zeros(N_CONTAINS, np.uint8)
         if rng.random() < 0.3:
             b, contains = self.babble(rng, n)
-            x = x / rms(x) + b / rms(b) * db(-10, 5, rng)
+            g = db(-10, 5, rng)
+            self.note(what="crowd level", level_db_vs_ambience=round(20 * np.log10(g), 1))
+            x = x / rms(x) + b / rms(b) * g
         return x, contains
 
     # --- examples ---
@@ -178,9 +217,13 @@ class Mixer:
             else:
                 c = trim(clip.astype(np.float32), RATE, pad_s=0.05)  # real clips have silence around the word
                 if self.split == "train":
-                    c = speed(c, rng.uniform(*SPEED))
+                    r = rng.uniform(*SPEED)
+                    c = speed(c, r)
+                    self.note(what="speed", factor=round(r, 3))
                 c = c / rms(c)
                 p = self.placement(rng)
+                self.note(what="placement", distance_m=round(p["d"], 2), room=p["room_kind"], lowpass_hz=p["fc"],
+                          muffled=p["muffled"])
                 c = self.place(c, p) / p["gain"]  # level handled via SNR below
                 dist_db = 20 * np.log10(p["d"] / REF_M)
                 end = WIN - int(rng.integers(1, END_SLACK)) * HOP - int(rng.integers(HOP))
@@ -194,15 +237,21 @@ class Mixer:
                 gap = int(rng.uniform(0.1, 0.6) * RATE)
                 if self.split != "test" and start - gap > RATE // 4 and rng.random() < 0.4:
                     # someone was talking before the keyword (same or another speaker)
+                    self.note(what="speech before the clip", gap_s=round(gap / RATE, 2))
                     pre, bits = self.conversation(rng, start - gap)
                     sig[: len(pre)] += pre * level * db(-6, 3, rng)
                     contains |= bits
             if rng.random() < p_clean:
                 bg = bg * 0.003
+                self.note(what="background", snr_db="clean (-50 dB)")
             else:
-                bg = bg * (level / rms(bg) * 10 ** (-(rng.uniform(*snr_db) - dist_db) / 20))
+                snr = rng.uniform(*snr_db)
+                bg = bg * (level / rms(bg) * 10 ** (-(snr - dist_db) / 20))
+                self.note(what="background", snr_db_at_0_5m=round(snr, 1), snr_db_actual=round(snr - dist_db, 1))
             x = sig + bg
-        x = x * (db(*LEVEL_DB, rng) / rms(x))
+        lv = db(*LEVEL_DB, rng)
+        self.note(what="mic level", dbfs=round(20 * np.log10(lv), 1))
+        x = x * (lv / rms(x))
         np.clip(x, -1, 1, out=x)
         return (x if audio else features(x)), contains
 
