@@ -11,8 +11,9 @@ ROOT = Path(__file__).resolve().parent.parent
 RES = ROOT / "data" / "results"
 sys.path.insert(0, str(ROOT / "model"))
 
-ARCH_ORDER = ["gru", "mingru", "tcn", "transformer"]
-ARCH_COLOR = {"gru": "#1f77b4", "mingru": "#2ca02c", "tcn": "#d62728", "transformer": "#9467bd"}
+ARCH_ORDER = ["apple", "svdf", "gru", "tcn", "transformer"]  # minGRU: tried, didn't learn (notebook 02)
+ARCH_COLOR = {"apple": "#7f7f7f", "svdf": "#ff7f0e", "gru": "#1f77b4", "mingru": "#2ca02c", "tcn": "#d62728",
+              "transformer": "#9467bd"}
 SIZE_ALPHA = [0.35, 0.5, 0.7, 0.85, 1.0]
 TILE_BUDGET = 16
 

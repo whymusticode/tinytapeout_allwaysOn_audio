@@ -16,6 +16,12 @@ Data splits (nothing real is ever trained on or selected on):
           real-meeting FA/h (first 20 h of AMI) at the val threshold, so the curves show
           whether simulator validation tracks reality during training.
 
+Recurrent models (stride 1: gru, mingru) are trained "stateful": every 1.6 s training window is
+preceded by a random 1.6 s negative window, so the model learns from a mid-stream state rather
+than only from a zero state (without this, state drifts on 60 s streams to values never seen in
+training, and false alarms explode). Strided models (tcn, transformer) have a finite receptive
+field shorter than one window, so they don't need it.
+
 Training: AdamW, warm-up + cosine, bf16 autocast (fp32 for the cuDNN/MIOpen GRU), batch 512
 (1/4 positives), GPU-side augmentation (tilt, jitter, band masks) and hard-negative mining.
 Validation every VAL_EVERY steps; stop after PATIENCE validations without improvement in
@@ -46,7 +52,8 @@ VAL_EVERY, PATIENCE = 250, 8
 MINE_EVERY, MINE_POOL, MINE_KEEP, MINE_FRAC = 500, 32768, 4096, 0.3
 AUG_TILT, AUG_JITTER, AUG_P_MASK = 0.5, 0.25, 0.3
 VAL_FAS = (0.5, 1.0, 2.0)
-FA_TARGETS = (0.5, 1.0, 2.0)
+FA_TARGETS = (0.5, 1.0, 2.0, 5.0, 10.0, 30.0)  # 5-30 FA/h: first-stage operating points (docs/SOA.md)
+FRR_TARGETS = (0.02, 0.05, 0.10)  # FA/h at these miss rates (Google's DSP stage: 1.2-4.1% at 0.5-10 FA/h)
 MON_AMI_CHUNKS = 300  # ~5 h of AMI for the per-validation real monitor
 FRAME_S = archs.FRAME_S
 NEG_WEIGHTS = {"convo": 0.35, "near": 0.10, "other": 0.25, "partial": 0.10, "amb": 0.20}
@@ -92,7 +99,7 @@ class Stream:
 
 
 def autocast(model):
-    return torch.autocast("cuda", dtype=torch.bfloat16, enabled=model.arch != "gru")
+    return torch.autocast("cuda", dtype=torch.bfloat16, enabled=model.arch not in ("gru", "mingru"))
 
 
 def fa_rate(S, thr):
@@ -153,6 +160,15 @@ class Data:
         starts = torch.randint(0, len(vX) - 100, (4096,), generator=g)
         keep = ~torch.stack([vign[s : s + 100].any() for s in starts])
         self.val_negwin = vX[(starts[keep, None] + torch.arange(100)).to(DEV)]
+        # Fixed preceding context for evaluating held-out keyword windows (a keyword is never
+        # heard from a zero state in a stream): val windows get val-stream audio, test windows
+        # test-stream audio.
+        self.ctx_val = self.val_negwin
+        tX = torch.cat([s.X for s in self.test_sim.values()])
+        tign = torch.from_numpy(np.concatenate([s.ignore for s in self.test_sim.values()]))
+        starts = torch.randint(0, len(tX) - 100, (4096,), generator=g)
+        keep = ~torch.stack([tign[s : s + 100].any() for s in starts])
+        self.ctx_test = tX[(starts[keep, None] + torch.arange(100)).to(DEV)]
         log(f"data for word {k} on GPU in {time.time() - t0:.0f}s: train {tuple(self.X.shape)}, "
             f"pos {len(self.pos)}, val pos {len(self.pos_val)}, test pos {len(self.pos_test)}, "
             f"real pos {0 if self.pos_real is None else len(self.pos_real)}, "
@@ -175,6 +191,11 @@ class Data:
             mask &= m[:, None]
             x = torch.where(mask[:, None, :], x.mean(dim=(1, 2), keepdim=True), x)
         return x
+
+    def prefix(self, n):
+        """n random negative windows (augmented, normalised), used as preceding context."""
+        idx = self.all_neg[torch.randint(len(self.all_neg), (n,), device=DEV)]
+        return (self.augment(self.X[idx].float() / 8) - self.mu) / self.sd
 
     def batch(self, hard):
         n_pos = int(BATCH * POS_FRAC)
@@ -203,12 +224,17 @@ def loss_fn(lp, ln):
 
 
 @torch.no_grad()
-def window_max(model, X, norm, last=None, bs=4096):
-    out = []
+def window_max(model, X, norm, ctx, last=None, bs=2048):
+    """Max logit per window, each window preceded by a fixed context window (ctx, cycled).
+    last: only the window's last frames (keyword must fire right after it ends); else the
+    whole window."""
+    out, P = [], ctx.shape[1]
     for i in range(0, len(X), bs):
+        x = X[i : i + bs]
+        c = ctx[torch.arange(i, i + len(x), device=DEV) % len(ctx)]
         with autocast(model):
-            l = model(norm(X[i : i + bs])).float()
-        out.append(l[:, -last:].max(1).values if last else l[:, WARMUP:].max(1).values)
+            l = model(norm(torch.cat([c, x], dim=1))).float()[:, P:]
+        out.append(l[:, -last:].max(1).values if last else l.max(1).values)
     return torch.cat(out).cpu().numpy()
 
 
@@ -216,18 +242,19 @@ def window_max(model, X, norm, last=None, bs=4096):
 def validate(model, D):
     model.eval()
     S = [(s, s.logits(model, D.norm)) for s in D.val_streams]
-    pos = window_max(model, D.pos_val, D.norm, last=POS_LAST)
+    pos = window_max(model, D.pos_val, D.norm, D.ctx_val, last=POS_LAST)
     res = {}
     for fa in VAL_FAS:
         res[f"val_frr@{fa}"] = float(np.mean(pos <= thr_for(S, fa)))
     res["val_score"] = float(np.mean([res[f"val_frr@{fa}"] for fa in VAL_FAS]))
+    ctx = D.norm(D.ctx_val)
     with autocast(model):
-        lp = model(D.norm(D.pos_val)).float()
-        ln = model(D.norm(D.val_negwin)).float()
+        lp = model(torch.cat([ctx[: len(D.pos_val)].roll(1, 0), D.norm(D.pos_val)], dim=1)).float()
+        ln = model(torch.cat([ctx.roll(7, 0), D.norm(D.val_negwin)], dim=1)).float()
     res["val_loss"] = float(loss_fn(lp, ln))
     thr = thr_for(S, 1.0)  # monitor only
     if D.pos_real is not None:
-        res["mon_frr_real@1.0"] = float(np.mean(window_max(model, D.pos_real, D.norm) <= thr))
+        res["mon_frr_real@1.0"] = float(np.mean(window_max(model, D.pos_real, D.norm, D.ctx_val) <= thr))
     res["mon_fa_ami@1.0"] = round(fa_rate([(D.mon_ami, D.mon_ami.logits(model, D.norm))], thr), 3)
     model.train()
     return res
@@ -242,8 +269,8 @@ def test(model, D):
     S = {n: (s, s.logits(model, D.norm)) for n, s in {**D.test_sim, **D.test_real}.items()}
     sim = [S["sim_convo"], S["sim_hard"]]
     real = [S["real_ami"], S["real_read"]]
-    pos_syn = window_max(model, D.pos_test, D.norm, last=POS_LAST)
-    pos_real = window_max(model, D.pos_real, D.norm) if D.pos_real is not None else None
+    pos_syn = window_max(model, D.pos_test, D.norm, D.ctx_test, last=POS_LAST)
+    pos_real = window_max(model, D.pos_real, D.norm, D.ctx_test) if D.pos_real is not None else None
     res = {"stream_hours": {n: round(s.hours, 2) for n, (s, _) in S.items()},
            "n_pos_syn": len(pos_syn), "n_pos_real": 0 if pos_real is None else len(pos_real)}
     for fa in FA_TARGETS:
@@ -257,6 +284,13 @@ def test(model, D):
     res["frr_syn@real1"] = float(np.mean(pos_syn <= thr))
     if pos_real is not None:
         res["frr_real@real1"] = float(np.mean(pos_real <= thr))
+    # first-stage view: how many false alarms per hour reach the host at a given miss rate
+    for p in FRR_TARGETS:
+        thr = float(np.quantile(pos_syn, p))
+        res[f"fa_sim@frr_syn{p:g}"] = round(fa_rate(sim, thr), 2)
+        if pos_real is not None:
+            thr = float(np.quantile(pos_real, p))
+            res[f"fa_real@frr_real{p:g}"] = round(fa_rate(real, thr), 2)
     model.train()
     return res
 
@@ -278,6 +312,8 @@ def run(D, arch, width, seed=0):
                 hard = cand[torch.topk(sc, MINE_KEEP).indices]
                 model.train()
         x, n_pos = D.batch(hard)
+        if model.stride == 1:  # stateful training for recurrent models
+            x = torch.cat([D.prefix(len(x)), x], dim=1)
         with autocast(model):
             l = model(x).float()
         loss = loss_fn(l[:n_pos], l[n_pos:])
@@ -307,8 +343,11 @@ def run(D, arch, width, seed=0):
 
 
 def _mine_scores(model, D, idx):
+    x = D.norm(D.X[idx])
+    if model.stride == 1:
+        x = torch.cat([D.prefix(len(x)), x], dim=1)
     with autocast(model):
-        return model(D.norm(D.X[idx])).float()[:, WARMUP:].max(1).values
+        return model(x).float()[:, WARMUP:].max(1).values
 
 
 def main():

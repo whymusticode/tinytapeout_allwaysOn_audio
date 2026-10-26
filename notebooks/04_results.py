@@ -43,7 +43,8 @@
 #
 # | date | what | outcome |
 # |---|---|---|
-# | 2026-10-26 | GPU (ROCm) trainer; 4 architectures × 5 sizes; early stopping on a simulator holdout split from the test half | running, telescope first |
+# | 2026-10-26 | Recurrent models: stateful training (each window preceded by 1.6 s of other audio) + keyword windows scored with preceding context | without it the GRU state drifted on long streams; minGRU dropped (didn't learn, see 02) |
+# | 2026-10-26 | GPU (ROCm) trainer; GRU / TCN / transformer × 5 sizes (4× params apart, middle ≈ 16 tiles); early stopping on a simulator holdout split from the test half | running, telescope first |
 # | 2026-10-26 | Training cache: 16 mixes per keyword clip (was 2), ±10% speed | fixed the overfitting that made long runs worse |
 # | 2026-10-26 | Validation with best-checkpoint selection | showed the 12k-step collapse was memorising ~4k positive windows |
 # | 2026-10-25 | Hard-negative mining + feature augmentation (CPU GRU H32) | frr_real@real1 0.81 → 0.72 |
@@ -119,6 +120,24 @@ if len(df):
                          "params": int(b["params"]), "tiles": b["tiles"], "frr_real@real1": round(b["frr_real@real1"], 3),
                          "frr_syn@1.0": round(b["frr_syn@1.0"], 3)})
     display(pd.DataFrame(rows))
+
+# %% [markdown]
+# ## As a first-stage sensor (cascade view)
+#
+# The big players run the always-on detector at a **high-recall** point and let a bigger
+# model on the host reject false triggers. Google's DSP first stage on TV audio: 0.5 FA/h at
+# 4.1% misses, up to 10 FA/h at 1.2% misses (docs/SOA.md §3.1). So the question per model is:
+# **at a 5% (or 10%) miss rate, how many false alarms per hour does it pass to the host?**
+# Real columns use real speakers and the real streams (106 h).
+
+# %%
+cols = ["fa_sim@frr_syn0.05", "fa_real@frr_real0.05", "fa_real@frr_real0.1", "frr_syn@5.0", "frr_syn@10.0", "frr_syn@30.0"]
+if runs and any(c in runs[0] for c in cols):
+    fs = pd.DataFrame([{"word": r["slug"], "arch": r["arch"], "params": r["params"], "tiles": r["tiles"],
+                        **{c: r.get(c) for c in cols}} for r in runs]).sort_values(["word", "arch", "params"])
+    display(fs.reset_index(drop=True))
+else:
+    print("operating points not computed yet for these runs (model/reeval.py adds them)")
 
 # %% [markdown]
 # ## Is the simulator honest?

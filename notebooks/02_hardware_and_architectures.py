@@ -69,7 +69,7 @@ import archs
 from nbutil import ARCH_COLOR, ARCH_ORDER, TILE_BUDGET
 
 rows = []
-for a in ARCH_ORDER:
+for a in ARCH_ORDER + ["mingru"]:
     for i, w in enumerate(archs.WIDTHS[a]):
         m = archs.build(a, w)
         rows.append({"arch": a, "size": i, "width": w, **archs.cost(m)})
@@ -105,14 +105,29 @@ plt.tight_layout()
 #   any model here needs.
 
 # %% [markdown]
-# ## The four architectures
+# ## The architectures
+#
+# Two of them copy what the big players published (details and references in
+# [`docs/SOA.md`](../docs/SOA.md)):
 #
 # | arch | structure | streaming state | why try it |
 # |---|---|---|---|
+# | **apple** | Apple's "Hey Siri" first stage: 5 sigmoid hidden layers over the last 20 frames, every frame | 20-frame history (PSRAM) | Apple's always-on detector is ~13–31k weights (derived in SOA.md §2.1); our smallest "apple" size (W=41, 20k) matches it |
+# | **svdf** | Google's E2E streaming KWS: 4 rank-1 SVDF layers (N nodes, 8-tap time filters) + 3 (N/3 nodes, 32 taps), bottlenecks, 32 ms stride | per-node time memories (PSRAM) | Google's published small-footprint design; E2E_40K ≈ N=96 |
 # | **GRU** | 1 layer GRU(H) → linear, every 16 ms frame | H values | the always-on KWS chip standard (Kim 2022, DeltaKWS 2024); smallest state |
-# | **minGRU** | 2 layers, gates from the input only (Feng et al. 2024) | H per layer, updated in place | trains as a parallel scan (fast on GPU); simpler update hardware (no recurrent matrix) |
+# | ~~minGRU~~ | 2 residual layers, gates from the input only (Feng et al. 2024) | H per layer, updated in place | **dropped, negative result**: see below |
 # | **TCN** | stride 2, 4 causal depthwise-separable conv blocks, dilation 1/2/4/8, residual | 30·C history values | TC-ResNet / UltraTrail / microWakeWord family; strided, so cheap on bandwidth |
 # | **Transformer** | stride 4 (64 ms tokens), 2 layers, 2 heads, causal attention over the last 1 s, learned relative-position bias | K-V cache, 16 tokens × 2 × d × 2 layers | you asked; attention over a short window, streamed with a K-V cache |
+#
+# **minGRU, tried and dropped.** Its parallel scan matches a step-by-step recurrence to 4e-6
+# and gradients flow, so the implementation is right. But at 1.5–4k steps it never
+# detected a single held-out keyword at 1 FA/h, in bf16 or fp32, with or without residual
+# blocks. Over the same steps GRU and TCN learn.
+#
+# The likely reason: its gates and candidate state depend only on the current input, so the
+# only nonlinearity across time comes from stacking layers. The paper's working models add
+# more layers and local convolutions. A per-frame RMS-norm variant also made the model
+# level-invariant: it fired 55 times/h on quiet far-field meetings.
 #
 # **Transformers in the KWS literature.**
 # * The Keyword Transformer (KWT; Berg et al., Interspeech 2021) reaches 97.7–98.6% on

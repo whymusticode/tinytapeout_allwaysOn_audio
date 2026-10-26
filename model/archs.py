@@ -98,19 +98,28 @@ class MinGRULayer(nn.Module):
 
 
 class MinGRUNet(nn.Module):
+    """Input projection to H, then 2 residual minGRU blocks: x <- x + W_o minGRU(x).
+    No per-frame normalisation: it would make the model level-invariant and amplify quiet
+    background (tried: 55 false alarms/h on far-field meetings)."""
+
     arch, stride = "mingru", 1
 
     def __init__(self, width):
         super().__init__()
         self.H = self.width = width
-        self.l1, self.l2 = MinGRULayer(N_IN, width), MinGRULayer(width, width)
+        self.inp = nn.Linear(N_IN, width)
+        self.cells = nn.ModuleList([MinGRULayer(width, width) for _ in range(2)])
+        self.outs = nn.ModuleList([nn.Linear(width, width) for _ in range(2)])
         self.out = nn.Linear(width, 1)
 
     def forward(self, x):
-        return self.out(self.l2(self.l1(x))).squeeze(-1)
+        x = self.inp(x)
+        for cell, o in zip(self.cells, self.outs):
+            x = x + o(cell(x))
+        return self.out(x).squeeze(-1)
 
     def state_bytes(self):
-        return {"on_chip": 2 * self.H + N_IN, "external": 0, "external_rw_per_step": 0}
+        return {"on_chip": 3 * self.H + N_IN, "external": 0, "external_rw_per_step": 0}
 
 
 class TCNBlock(nn.Module):
@@ -192,13 +201,93 @@ class TransformerNet(nn.Module):
                 "external": 2 * W * d * L, "external_rw_per_step": (2 * W * d + 2 * d) * L}
 
 
-ARCHS = {"gru": GRUNet, "mingru": MinGRUNet, "tcn": TCNNet, "transformer": TransformerNet}
+class AppleDNN(nn.Module):
+    """Apple's 2017 "Hey Siri" first-stage shape [docs/SOA.md A1]: a 5-hidden-layer sigmoid DNN
+    over the last 20 frames (0.32 s here; Apple: 20 x 10 ms), evaluated every frame. Apple
+    predicts ~20 phonetic states and scores them with an HMM; here the output is the keyword
+    logit directly (end-to-end, as in Apple's 2023 system). The 20-frame history sits in
+    PSRAM (320 B read per frame); only the activations are on chip."""
+
+    arch, stride, CONTEXT, LAYERS = "apple", 1, 20, 5
+
+    def __init__(self, width):
+        super().__init__()
+        self.W = self.width = width
+        dims = [N_IN * self.CONTEXT] + [width] * self.LAYERS
+        self.hidden = nn.ModuleList([nn.Linear(a, b) for a, b in zip(dims[:-1], dims[1:])])
+        self.out = nn.Linear(width, 1)
+
+    def forward(self, x):
+        T = x.shape[1]
+        x = F.pad(x, (0, 0, self.CONTEXT - 1, 0))  # causal: frame t sees t-19 .. t
+        h = x.unfold(1, self.CONTEXT, 1).transpose(2, 3).reshape(x.shape[0], T, -1)
+        for lin in self.hidden:
+            h = torch.sigmoid(lin(h))
+        return self.out(h).squeeze(-1)
+
+    def state_bytes(self):
+        return {"on_chip": 2 * self.W + 2 * N_IN, "external": N_IN * self.CONTEXT,
+                "external_rw_per_step": N_IN * (self.CONTEXT + 1)}
+
+
+class SVDFLayer(nn.Module):
+    """Rank-1 SVDF (Google, [docs/SOA.md G2]): per node a feature filter (linear over the input)
+    and a time filter over that node's last T feature-filter outputs, then ReLU."""
+
+    def __init__(self, n_in, nodes, T):
+        super().__init__()
+        self.T = T
+        self.feat = nn.Linear(n_in, nodes, bias=False)
+        self.time = nn.Conv1d(nodes, nodes, T, groups=nodes)  # depthwise: one T-tap filter per node
+
+    def forward(self, x):  # (B, T, C)
+        f = self.feat(x).transpose(1, 2)
+        return F.relu(self.time(F.pad(f, (self.T - 1, 0)))).transpose(1, 2)
+
+
+class SVDFNet(nn.Module):
+    """Google E2E streaming KWS shape [G2]: 4 SVDF layers (N nodes, T=8) and 3 SVDF layers
+    (N/3 nodes, T=32), linear bottlenecks of N/3 between them, one inference per 2 frames
+    (32 ms; Google: 20 ms). Google's E2E_40K is N=96. SVDF memories live in PSRAM."""
+
+    arch, stride = "svdf", 2
+
+    def __init__(self, width):
+        super().__init__()
+        self.N = self.width = width
+        n2 = max(8, width // 3)
+        layers, d = [], N_IN * self.stride
+        for i in range(4):
+            layers += [SVDFLayer(d, width, 8), nn.Linear(width, n2)]
+            d = n2
+        for i in range(3):
+            layers += [SVDFLayer(d, n2, 32)]
+            d = n2
+        self.layers = nn.Sequential(*layers)
+        self.n2 = n2
+        self.out = nn.Linear(n2, 1)
+
+    def forward(self, x):
+        T = x.shape[1]
+        h = self.layers(stack(x, self.stride))
+        return hold(self.out(h).squeeze(-1), self.stride)[:, :T]
+
+    def state_bytes(self):
+        mem = 4 * 8 * self.N + 3 * 32 * self.n2
+        return {"on_chip": N_IN * self.stride + 2 * self.N + self.n2, "external": mem,
+                "external_rw_per_step": mem + 4 * self.N + 3 * self.n2}
+
+
+ARCHS = {"gru": GRUNet, "mingru": MinGRUNet, "tcn": TCNNet, "transformer": TransformerNet,
+         "apple": AppleDNN, "svdf": SVDFNet}
 # 5 sizes per architecture, ~4x parameters apart, the middle one ~16 tiles (cost model below)
 WIDTHS = {
     "gru": (43, 86, 172, 344, 688),
-    "mingru": (43, 86, 172, 344, 688),
+    "mingru": (30, 60, 116, 232, 464),
     "tcn": (16, 33, 66, 132, 264),
     "transformer": (10, 20, 40, 80, 160),
+    "apple": (41, 82, 164, 328, 656),  # 41 ~ Apple's 5x32 first stage in weights (~14-20k)
+    "svdf": (36, 72, 160, 320, 640),  # 96 = Google's E2E_40K
 }
 
 
