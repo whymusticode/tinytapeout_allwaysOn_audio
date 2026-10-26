@@ -8,7 +8,7 @@ project:
   clock_hz:     16384000      # Clock frequency in Hz (or 0 if not applicable)
 
   # How many tiles your design occupies? A single tile is about 167x108 uM.
-  tiles: "1x2"          # Valid values: 1x1, 1x2, 2x2, 3x2, 4x2, 6x2 or 8x2
+  tiles: "2x2"          # Valid values: 1x1, 1x2, 2x2, 3x2, 4x2, 6x2 or 8x2
 
   # Your top module name must start with "tt_um_". Make it unique by including your github username:
   top_module:  "tt_um_whymusticode_wakeword"
@@ -20,6 +20,7 @@ project:
     - "project.v"
     - "pdm_cic.v"
     - "vad.v"
+    - "audio_ring.v"
 
 # The pinout of your project. Leave unused pins blank. DO NOT delete or add any pins.
 # This section is for the datasheet/website. Use descriptive names (e.g., RX, TX, MOSI, SCL, SEG_A, etc.).
@@ -27,7 +28,7 @@ pinout:
   # Inputs
   ui[0]: "PDM_DATA"
   ui[1]: "PDM_EDGE"
-  ui[2]: "SPI_SCK (reserved)"
+  ui[2]: "STREAM_REQ"
   ui[3]: "SPI_CS_N (reserved)"
   ui[4]: "SPI_MOSI (reserved)"
   ui[5]: "VAD_THR[0]"
@@ -37,22 +38,22 @@ pinout:
   # Outputs
   uo[0]: "WAKE_IRQ (reserved)"
   uo[1]: "PDM_CLK"
-  uo[2]: "SPI_MISO (reserved)"
+  uo[2]: "AUDIO_TX"
   uo[3]: "VAD"
-  uo[4]: ""
+  uo[4]: "STREAMING"
   uo[5]: ""
   uo[6]: ""
   uo[7]: ""
 
   # Bidirectional pins
-  uio[0]: "QSPI_CS0 flash (reserved)"
-  uio[1]: "QSPI_SD0 (reserved)"
-  uio[2]: "QSPI_SD1 (reserved)"
-  uio[3]: "QSPI_SCK (reserved)"
-  uio[4]: "QSPI_SD2 (reserved)"
-  uio[5]: "QSPI_SD3 (reserved)"
-  uio[6]: "QSPI_CS1 RAM A (reserved)"
-  uio[7]: "QSPI_CS2 RAM B (reserved)"
+  uio[0]: "QSPI_CS0 flash"
+  uio[1]: "QSPI_SD0 MOSI"
+  uio[2]: "QSPI_SD1 MISO"
+  uio[3]: "QSPI_SCK"
+  uio[4]: "QSPI_SD2"
+  uio[5]: "QSPI_SD3"
+  uio[6]: "QSPI_CS1 RAM A (audio buffer)"
+  uio[7]: "QSPI_CS2 RAM B"
 
 # Do not change!
 yaml_version: 6

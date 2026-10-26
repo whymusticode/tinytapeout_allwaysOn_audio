@@ -7,15 +7,17 @@
  * Pin map (see info.yaml / docs/info.md):
  *   ui[0]   PDM_DATA      mic data in
  *   ui[1]   PDM_EDGE      0: data valid while PDM_CLK high, 1: while low
- *   ui[2]   SPI_SCK       host SPI (reserved)
+ *   ui[2]   STREAM_REQ    host holds high: stream the last 2 s of audio, then live audio, on AUDIO_TX
  *   ui[3]   SPI_CS_N      host SPI (reserved)
  *   ui[4]   SPI_MOSI      host SPI (reserved)
  *   ui[7:5] VAD_THR       bring-up VAD threshold, x512 (until SPI config exists)
  *   uo[0]   WAKE_IRQ      wake word detected (not yet implemented)
  *   uo[1]   PDM_CLK       mic clock, clk/16 (1.024 MHz at 16.384 MHz)
- *   uo[2]   SPI_MISO      host SPI (reserved)
+ *   uo[2]   AUDIO_TX      UART 8N1, 1.024 Mbaud: "WAKE" then int16 little-endian PCM at 16 kHz
  *   uo[3]   VAD           voice activity
- *   uio     QSPI Pmod     weight flash / PSRAM (reserved, TT qspi-pmod pinout)
+ *   uo[4]   STREAMING     a stream session is active
+ *   uio     QSPI Pmod     TT qspi-pmod pinout: uio[6] PSRAM A = rolling audio buffer (SPI mode),
+ *                         uio[0] flash and uio[7] PSRAM B deselected (weights later)
  */
 
 `default_nettype none
@@ -57,11 +59,31 @@ module tt_um_whymusticode_wakeword (
       .envelope (vad_env)
   );
 
-  assign uo_out  = {4'b0, vad_active, 1'b0, pdm_clk, 1'b0};
-  assign uio_out = 0;
-  assign uio_oe  = 0;
+  // Rolling audio buffer in PSRAM A, streamed to the host on request (second-stage verifier).
+  wire audio_tx, streaming, ram_cs_n, spi_sck, spi_mosi;
+
+  audio_ring u_ring (
+      .clk       (clk),
+      .rst_n     (rst_n),
+      .pcm       (pcm),
+      .pcm_valid (pcm_valid),
+      .stream_req(ui_in[2]),
+      .uart_tx   (audio_tx),
+      .streaming (streaming),
+      .ram_cs_n  (ram_cs_n),
+      .spi_sck   (spi_sck),
+      .spi_mosi  (spi_mosi),
+      .spi_miso  (uio_in[2])
+  );
+
+  assign uo_out = {3'b0, streaming, vad_active, audio_tx, pdm_clk, 1'b0};
+
+  // QSPI Pmod: [0] flash CS, [1] SD0/MOSI, [2] SD1/MISO, [3] SCK, [4] SD2, [5] SD3, [6] RAM A CS, [7] RAM B CS.
+  // SD2/SD3 are held high (flash WP#/HOLD# inactive) while the bus runs in plain SPI mode.
+  assign uio_out = {1'b1, ram_cs_n, 1'b1, 1'b1, spi_sck, 1'b0, spi_mosi, 1'b1};
+  assign uio_oe  = 8'b1111_1011;
 
   // List all unused inputs to prevent warnings
-  wire _unused = &{ena, ui_in[4:2], uio_in, vad_env, 1'b0};
+  wire _unused = &{ena, ui_in[4:3], uio_in[7:3], uio_in[1:0], vad_env, 1'b0};
 
 endmodule

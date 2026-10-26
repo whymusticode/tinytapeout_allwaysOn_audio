@@ -128,3 +128,28 @@ async def test_vad(dut):
     dut._log.info(f"VAD on for {got.sum()} of {len(got)} samples (ref {want_vad.sum()})")
     assert want_vad[:320].sum() == 0 and want_vad[340:640].all() and want_vad[-100:].sum() == 0
     assert np.array_equal(got, want_vad), f"VAD mismatches at {np.nonzero(got != want_vad)[0]}"
+
+
+@cocotb.test()
+async def test_psram_buffer_init(dut):
+    """The rolling audio buffer resets PSRAM A (0x66, 0x99) after power-up, then starts
+    writing samples; the flash and PSRAM B stay deselected. (Streaming itself is checked
+    bit-exact in test/unit/test_audio_ring.py with a PSRAM model.)"""
+    await reset(dut)
+    cmds, bits, prev_sck, n_cycles = [], [], 0, 0
+    while len(cmds) < 3 and n_cycles < 8000:
+        await RisingEdge(dut.clk)
+        n_cycles += 1
+        uo = int(dut.uio_out.value)
+        assert int(dut.uio_oe.value) == 0b1111_1011
+        assert uo & 1 and uo >> 7 & 1, "flash / PSRAM B must stay deselected"
+        cs, sck, mosi = uo >> 6 & 1, uo >> 3 & 1, uo >> 1 & 1
+        if not cs and sck and not prev_sck:
+            bits.append(mosi)
+        if cs and bits:
+            cmds.append(int("".join(map(str, bits[:8])), 2))
+            bits = []
+        prev_sck = sck
+    dut._log.info(f"PSRAM commands after reset: {[hex(c) for c in cmds]} ({n_cycles} cycles)")
+    assert cmds[:2] == [0x66, 0x99], cmds
+    assert cmds[2] == 0x02, "expected the first sample write after the reset sequence"
