@@ -1,0 +1,137 @@
+# Candidate wake words for the detectability sweep.
+#
+# Each candidate is trained with the same model budget and scored on
+# false rejects at a fixed false-accept rate (per hour) over long background streams.
+# Synthetic positives come from Piper TTS (many speakers and speeds), mixed into
+# noise/music/speech backgrounds and room reverb.
+#
+# Groups:
+#   control_real  Speech Commands words: real speakers. Calibrates synthetic-only training against reality.
+#   control_bad   Expected to be poor (common words). Sanity check that the ranking makes sense.
+#   linux         Open-source themed phrases.
+#   prefixed      "hey/okay X" with an uncommon X.
+#   word          Single long, uncommon real words.
+#   invented      Made-up words built from distinctive phonemes (plosives, fricatives, varied vowels).
+#   phrase        Longer phrases (more evidence, but more effort to say).
+#
+# Avoided: other companies' wake words and brand names.
+
+candidates:
+  # --- control_real (have real recordings in Speech Commands v2) ---
+  - {phrase: "marvin",    group: control_real}
+  - {phrase: "sheila",    group: control_real}
+  - {phrase: "visual",    group: control_real}
+  - {phrase: "backward",  group: control_real}
+  - {phrase: "forward",   group: control_real}
+  - {phrase: "follow",    group: control_real}
+  - {phrase: "happy",     group: control_real}
+  - {phrase: "house",     group: control_real}
+  - {phrase: "learn",     group: control_real}
+  - {phrase: "tree",      group: control_real}
+  - {phrase: "wow",       group: control_real}
+  - {phrase: "bird",      group: control_real}
+
+  # --- control_bad ---
+  - {phrase: "computer",  group: control_bad}
+  - {phrase: "hello",     group: control_bad}
+  - {phrase: "okay",      group: control_bad}
+  - {phrase: "hey you",   group: control_bad}
+  - {phrase: "listen",    group: control_bad}
+
+  # --- linux ---
+  - {phrase: "hey tux",           group: linux}
+  - {phrase: "okay tux",          group: linux}
+  - {phrase: "hello tux",         group: linux}
+  - {phrase: "hey penguin",       group: linux}
+  - {phrase: "okay penguin",      group: linux}
+  - {phrase: "hey linux",         group: linux}
+  - {phrase: "hello linux",       group: linux}
+  - {phrase: "hey kernel",        group: linux}
+  - {phrase: "hey daemon",        group: linux}
+  - {phrase: "hey terminal",      group: linux}
+  - {phrase: "hey gnu",           group: linux}
+  - {phrase: "okay gnu",          group: linux}
+  - {phrase: "hey freedom",       group: linux}
+  - {phrase: "hey open source",   group: linux}
+
+  # --- prefixed ---
+  - {phrase: "hey atlas",     group: prefixed}
+  - {phrase: "hey cobalt",    group: prefixed}
+  - {phrase: "hey nimbus",    group: prefixed}
+  - {phrase: "okay kestrel",  group: prefixed}
+  - {phrase: "hey kestrel",   group: prefixed}
+  - {phrase: "hey quasar",    group: prefixed}
+  - {phrase: "hey zephyr",    group: prefixed}
+  - {phrase: "hey comet",     group: prefixed}
+  - {phrase: "hey falcon",    group: prefixed}
+  - {phrase: "hey sputnik",   group: prefixed}
+  - {phrase: "hey gizmo",     group: prefixed}
+  - {phrase: "hey jupiter",   group: prefixed}
+  - {phrase: "hey nova",      group: prefixed}
+  - {phrase: "hey orbit",     group: prefixed}
+  - {phrase: "hey pickle",    group: prefixed}
+  - {phrase: "hey kiwi",      group: prefixed}
+  - {phrase: "hey mocha",     group: prefixed}
+  - {phrase: "hey biscuit",   group: prefixed}
+  - {phrase: "hey waffle",    group: prefixed}
+  - {phrase: "hey vector",    group: prefixed}
+  - {phrase: "okay robot",    group: prefixed}
+  - {phrase: "okay jarvis",   group: prefixed}
+  - {phrase: "hey octavia",   group: prefixed}
+  - {phrase: "hey pixie",     group: prefixed}
+  - {phrase: "hey taco",      group: prefixed}
+  - {phrase: "okay buddy",    group: prefixed}
+  - {phrase: "hey captain",   group: prefixed}
+  - {phrase: "hey zigzag",    group: prefixed}
+
+  # --- word ---
+  - {phrase: "abracadabra",   group: word}
+  - {phrase: "kalamazoo",     group: word}
+  - {phrase: "periscope",     group: word}
+  - {phrase: "caterpillar",   group: word}
+  - {phrase: "octopus",       group: word}
+  - {phrase: "avocado",       group: word}
+  - {phrase: "rutabaga",      group: word}
+  - {phrase: "piccolo",       group: word}
+  - {phrase: "tapioca",       group: word}
+  - {phrase: "boomerang",     group: word}
+  - {phrase: "kaleidoscope",  group: word}
+  - {phrase: "xylophone",     group: word}
+  - {phrase: "hullabaloo",    group: word}
+  - {phrase: "pumpernickel",  group: word}
+  - {phrase: "bamboozle",     group: word}
+  - {phrase: "zucchini",      group: word}
+  - {phrase: "harmonica",     group: word}
+  - {phrase: "telescope",     group: word}
+  - {phrase: "accordion",     group: word}
+  - {phrase: "pistachio",     group: word}
+
+  # --- invented ---
+  - {phrase: "kazoodle",  group: invented}
+  - {phrase: "zorbex",    group: invented}
+  - {phrase: "vexilo",    group: invented}
+  - {phrase: "tekalo",    group: invented}
+  - {phrase: "kivaro",    group: invented}
+  - {phrase: "brixo",     group: invented}
+  - {phrase: "pakuzo",    group: invented}
+  - {phrase: "quillix",   group: invented}
+  - {phrase: "toktari",   group: invented}
+  - {phrase: "zubika",    group: invented}
+  - {phrase: "orkato",    group: invented}
+  - {phrase: "jaxtero",   group: invented}
+  - {phrase: "kipzee",    group: invented}
+  - {phrase: "dazzik",    group: invented}
+  - {phrase: "fizzbot",   group: invented}
+  - {phrase: "tuxedo",    group: invented, note: "real word, but a Tux pun"}
+  - {phrase: "okay zuko", group: invented}
+  - {phrase: "hey zibbit",group: invented}
+
+  # --- phrase ---
+  - {phrase: "hey there tux",        group: phrase}
+  - {phrase: "listen up tux",        group: phrase}
+  - {phrase: "okay little penguin",  group: phrase}
+  - {phrase: "wake up penguin",      group: phrase}
+  - {phrase: "hey open computer",    group: phrase}
+  - {phrase: "computer wake up",     group: phrase}
+  - {phrase: "hey free machine",     group: phrase}
+  - {phrase: "okay pocket penguin",  group: phrase}

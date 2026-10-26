@@ -1,0 +1,4 @@
+pdm_capture
+.venv/
+recordings/
+labels/

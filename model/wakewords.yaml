@@ -1,0 +1,81 @@
+# Candidate wake words, v2: only words with real recordings, so every candidate gets a
+# real-speech test (MSWC / Common Voice, plus Speech Commands for control_real).
+# Training is simulated (TTS); the final wake word is chosen much later.
+# Columns in comments: real speakers in MSWC (+ Speech Commands test clips), uses per million
+# words in the conversation text corpus (Switchboard + subtitles + DailyDialog).
+# Earlier list (hey/okay phrases, invented words; no real recordings): wakewords_v1.yaml
+
+candidates:
+  # --- control_real ---
+  - {phrase: marvin,         group: control_real  }  # speakers 35 + SC 195, 5/M
+  - {phrase: sheila,         group: control_real  }  # speakers 20 + SC 212, 3/M
+  - {phrase: visual,         group: control_real  }  # speakers 209 + SC 165, 6/M
+  - {phrase: backward,       group: control_real  }  # speakers 25 + SC 165, 3/M
+  - {phrase: forward,        group: control_real  }  # speakers 897 + SC 155, 83/M
+  - {phrase: follow,         group: control_real  }  # speakers 797 + SC 172, 100/M
+  - {phrase: happy,          group: control_real  }  # speakers 1480 + SC 203, 229/M
+  - {phrase: house,          group: control_real  }  # speakers 3462 + SC 191, 584/M
+  - {phrase: learn,          group: control_real  }  # speakers 1485 + SC 161, 171/M
+  - {phrase: tree,           group: control_real  }  # speakers 1204 + SC 193, 54/M
+  - {phrase: wow,            group: control_real  }  # speakers 218 + SC 206, 178/M
+  - {phrase: bird,           group: control_real  }  # speakers 535 + SC 185, 38/M
+
+  # --- control_common ---
+  - {phrase: computer,       group: control_common}  # speakers 1147, 207/M
+  - {phrase: okay,           group: control_common}  # speakers 453, 1282/M
+  - {phrase: hello,          group: control_common}  # speakers 271, 277/M
+  - {phrase: listen,         group: control_common}  # speakers 1122, 271/M
+  - {phrase: something,      group: control_common}  # speakers 3568, 1694/M
+  - {phrase: anything,       group: control_common}  # speakers 3141, 964/M
+  - {phrase: really,         group: control_common}  # speakers 3300, 3508/M
+  - {phrase: people,         group: control_common}  # speakers 7190, 2043/M
+
+  # --- rare_long ---
+  - {phrase: alchemist,      group: rare_long     }  # speakers 3242, 0/M
+  - {phrase: telescope,      group: rare_long     }  # speakers 757, 1/M
+  - {phrase: caravan,        group: rare_long     }  # speakers 679, 2/M
+  - {phrase: oasis,          group: rare_long     }  # speakers 965, 2/M
+  - {phrase: pyramids,       group: rare_long     }  # speakers 980, 2/M
+  - {phrase: cylinder,       group: rare_long     }  # speakers 1330, 4/M
+  - {phrase: cemetery,       group: rare_long     }  # speakers 763, 4/M
+  - {phrase: destiny,        group: rare_long     }  # speakers 1320, 9/M
+  - {phrase: universal,      group: rare_long     }  # speakers 656, 14/M
+  - {phrase: episode,        group: rare_long     }  # speakers 510, 12/M
+  - {phrase: visible,        group: rare_long     }  # speakers 772, 6/M
+  - {phrase: embedded,       group: rare_long     }  # speakers 599, 0/M
+  - {phrase: ogilvy,         group: rare_long     }  # speakers 611, 0/M
+  - {phrase: henderson,      group: rare_long     }  # speakers 1090, 1/M
+  - {phrase: elements,       group: rare_long     }  # speakers 534, 4/M
+  - {phrase: programming,    group: rare_long     }  # speakers 545, 13/M
+  - {phrase: origin,         group: rare_long     }  # speakers 532, 2/M
+  - {phrase: alchemy,        group: rare_long     }  # speakers 659, 0/M
+  - {phrase: abandoned,      group: rare_long     }  # speakers 667, 5/M
+  - {phrase: surrounding,    group: rare_long     }  # speakers 768, 6/M
+  - {phrase: englishman,     group: rare_long     }  # speakers 1966, 2/M
+  - {phrase: township,       group: rare_long     }  # speakers 817, 0/M
+  - {phrase: subsequently,   group: rare_long     }  # speakers 587, 1/M
+
+  # --- rare_short ---
+  - {phrase: crystal,        group: rare_short    }  # speakers 1424, 9/M
+  - {phrase: treasure,       group: rare_short    }  # speakers 1752, 10/M
+  - {phrase: shepherd,       group: rare_short    }  # speakers 880, 10/M
+  - {phrase: camel,          group: rare_short    }  # speakers 1101, 2/M
+  - {phrase: merchant,       group: rare_short    }  # speakers 1583, 2/M
+  - {phrase: guitar,         group: rare_short    }  # speakers 795, 13/M
+  - {phrase: shadow,         group: rare_short    }  # speakers 594, 14/M
+  - {phrase: tablet,         group: rare_short    }  # speakers 519, 0/M
+  - {phrase: gravel,         group: rare_short    }  # speakers 574, 2/M
+  - {phrase: omens,          group: rare_short    }  # speakers 1456, 0/M
+  - {phrase: railway,        group: rare_short    }  # speakers 1411, 7/M
+  - {phrase: aircraft,       group: rare_short    }  # speakers 575, 6/M
+  - {phrase: species,        group: rare_short    }  # speakers 1063, 7/M
+  - {phrase: stranger,       group: rare_short    }  # speakers 832, 13/M
+  - {phrase: album,          group: rare_short    }  # speakers 1842, 12/M
+  - {phrase: silent,         group: rare_short    }  # speakers 805, 9/M
+  - {phrase: novel,          group: rare_short    }  # speakers 671, 12/M
+  - {phrase: website,        group: rare_short    }  # speakers 771, 11/M
+  - {phrase: display,        group: rare_short    }  # speakers 608, 13/M
+  - {phrase: function,       group: rare_short    }  # speakers 697, 9/M
+  - {phrase: tourists,       group: rare_short    }  # speakers 554, 6/M
+  - {phrase: crossing,       group: rare_short    }  # speakers 573, 10/M
+  - {phrase: blessing,       group: rare_short    }  # speakers 510, 5/M

@@ -1,0 +1,12 @@
+[Unit]
+Description=Always-on two-mic PDM recorder (wake-word data collection)
+After=local-fs.target
+
+[Service]
+# root: /dev/pio0 is root-only on a stock install
+ExecStart=@HERE@/.venv/bin/python @HERE@/record.py --out @OUT@
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
