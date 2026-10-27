@@ -281,6 +281,60 @@ academic work so far, e.g.:
 - **The samples are also valuable test data for us.** Each person's few recordings measure the
   real FRR for that voice, which is what our simulator has to predict.
 
+## 10. Pretrained audio models we could build on
+
+None of these take our input (16 IIR bands, 16 ms frames, uint8 log2): they use 32–40 mel
+bands at 10 ms. So their early layers can't be dropped in as-is. They can serve as teachers,
+probes and templates instead. The search space (`model/search_space.py`) has knobs for each.
+
+| Model | What it is | Size | License | How we use it |
+|---|---|---|---|---|
+| Google speech embedding [G3, O4] (openWakeWord's backbone) | Conv net, 76 × 32 log-mel window → 96-d embedding every 80 ms. Trained by Google on large real speech for few-shot keyword spotting (the [G3] paper). | Too big for the chip (not a target) | Apache-2.0 (TF Hub) | **Teacher** for distillation on our simulated audio. **Probe P5:** frozen embedding + small head trained on our simulated data, to see what a pretrained representation buys. |
+| openWakeWord [O4] | The embedding above + a small head per word. Positives 100% synthetic TTS; negatives ~30k h. Target < 5% FRR at < 0.5 FA/h. | Head is small, backbone fixed | Code Apache-2.0, **models CC BY-NC-SA 4.0** | **Probe P1:** run "hey jarvis"/"alexa" on our simulator's clips and negative streams, to calibrate how hard our test set is. Benchmark only, because of the NC license. |
+| microWakeWord [O1, O5] | Streaming MixConv (mixed-kernel depthwise) CNN from Google's kws_streaming. 40 features every 10 ms, inference every 30 ms, quantised. Trained on Piper-synthetic positives (as we are). | Our size class: okay_nabu runs in a 22.9 kB tensor arena (stated, model JSON) | Repo license not checked | **Probe P1** like openWakeWord. Its MixConv block is a TCN option (`kernel: mix357`). |
+| BC-ResNet [O6] | 2D freq × time conv with a broadcast temporal branch, scaled by width. 98.0% / 98.7% on Speech Commands v1/v2 (stated). | ~9k (BC-ResNet-1) to ~320k (-8) params (paper table, not re-checked) | BSD-3-Clause-Clear | **Architecture template** (`bcresnet` family). Not its weights: they are trained on Speech Commands, which is part of our real test set. |
+| Whisper tiny / wav2vec2 / HuBERT | Large real-speech encoders | 39M+ | MIT / Apache | **Teachers:** frame-level phonetic targets for distillation, and auto-labelling the Pi recordings. |
+| YAMNet / PANNs / EfficientAT | Sound-event classifiers (AudioSet) | 3–80M | Apache / MIT | Low value: not speech-specific. Maybe as an ambience-class teacher. |
+
+**What "start from a pretrained net" becomes for us**
+
+1. **Distillation.** Run a teacher on the raw audio of our simulated mixes and train the
+   student to match its outputs, alongside the keyword loss. The student never sees real
+   speech, only the teacher's predictions on simulated audio, so the sim-only rule holds.
+2. **Our own pretraining in our feature space.**
+   - Pretrain the chip-sized student on a bigger task over the same simulated data:
+     classify all 66 candidate words, or predict phones. Piper renders from phonemes, so
+     phone labels come free.
+   - Then fine-tune on the target word.
+   - This is the closest thing to Apple's first stage, which is a phonetic acoustic model
+     scored by an HMM [A1].
+3. **Front-end option.** If probe P3 shows 40-mel / 10 ms features are much better than ours,
+   the front end could be redesigned to be mel-like. Pretrained early layers would then
+   transfer more directly, at a tile cost.
+
+**Caution:** models trained on Speech Commands or MSWC must not be used as starting weights.
+Those sets are our real test data, so the real-test numbers would be contaminated.
+
+## 11. Timeline: launches vs papers
+
+Papers describe systems that had **already shipped**, 1–3 years earlier. So the published
+architectures are the ones that fit the phone DSPs of 2013–2017, a budget like ours.
+
+| Year | Product | Paper |
+|---|---|---|
+| Aug 2013 | Moto X "OK Google Now": always-listening on a TI C55x DSP; fixed phrase, enrolled several times in a quiet room. Built with Sensory/Nuance, not Google's own net [T1, T2] (secondary). | |
+| late 2013 | "OK Google" hotword on the Nexus 5 / Google Now launcher (screen on) (from memory, not re-checked). | |
+| 2014 | Hey Siri in iOS 8, only while plugged in [T3] (secondary). Amazon Echo launches (Nov). | Google's DNN hotword, ICASSP 2014 [G5]: the "OK Google" detector of the time. |
+| Sep 2015 | iPhone 6s: always-on Hey Siri on the low-power M9/A9 path, with an enrollment step [T3] (secondary). | |
+| 2016–17 | Google Home (2016); Voice Match multi-user (2017); Pixel 2 (2017). | GE2E speaker verification (2017/18) [G6]; Apple's Hey Siri blog [A1] (2017, describing the 2015 system); Google cascade with a DSP first stage [G1] (Dec 2017). |
+| 2018 | "Hey Google" added. | Personalized Hey Siri [A3]; Google E2E streaming SVDF [G2]. |
+| 2020 | | Google speech embedding + TTS-synthesised training data [G3]. |
+| 2023 | | Apple's newer voice-trigger system [A2]. |
+
+**Gap:** no big-player paper describes an attention-based first stage. Attention in KWS is
+academic (Keyword Transformer 2021 [O2]) at sizes well above ours. That is why the search
+space includes it.
+
 ## References
 
 - [A1] Apple Machine Learning Research, "Hey Siri: An On-device DNN-powered Voice Trigger for Apple's Personal Assistant," 2017. https://machinelearning.apple.com/research/hey-siri
@@ -311,3 +365,9 @@ academic work so far, e.g.:
 - [O1] ESPHome micro_wake_word. https://esphome.io/components/micro_wake_word.html
 - [O2] A. Berg, M. O'Connor, M. Tairum Cruz, "Keyword Transformer: A Self-Attention Model for Keyword Spotting," Interspeech 2021, arXiv:2104.00769 (Table 1: KWT-1 607K, KWT-2 2,394K, KWT-3 5,361K params). https://arxiv.org/abs/2104.00769
 - [O3] Y. Zhang et al., "Hello Edge: Keyword Spotting on Microcontrollers," arXiv:1711.07128. https://arxiv.org/abs/1711.07128
+- [O4] D. Scripka, openWakeWord (models CC BY-NC-SA 4.0; backbone = Google speech_embedding, https://tfhub.dev/google/speech_embedding/1). https://github.com/dscripka/openWakeWord
+- [O5] K. Ahrendt, microWakeWord (training code); models: https://github.com/esphome/micro-wake-word-models . https://github.com/kahrendt/microWakeWord
+- [O6] B. Kim, S. Chang, J. Lee, D. Sung, "Broadcasted Residual Learning for Efficient Keyword Spotting," Interspeech 2021, arXiv:2106.04140; code https://github.com/Qualcomm-AI-research/bcresnet
+- [T1] AnandTech, "A Quick Look at the Moto X: Touchless Control," Aug 2013. https://www.anandtech.com/show/7197/a-quick-look-at-the-moto-x-motorolas-new-flagship/2 ; BDTI, "The Rise of 'Always Aware' Devices" (TI C55x DSP). https://www.bdti.com/node/708
+- [T2] Sensory, "Out today: Moto X is always listening," 2013. https://sensory.com/news/out-today-moto-x-is-always-listening/
+- [T3] AppleInsider, "Apple's efficient M9 coprocessor will let your iPhone 6s ... make 'Hey Siri' always on," Sep 2015. https://forums.appleinsider.com/discussion/188165 ; 9to5Mac Hey Siri guide (iOS 8 plugged-in only). https://9to5mac.com/guides/hey-siri/
