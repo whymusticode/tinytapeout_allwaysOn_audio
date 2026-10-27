@@ -134,7 +134,9 @@ def evaluate(model, S, k, half, real=False):
             E.Neg(*stream_scores(model, S["sim_hard"], None, half, "sim_hard"), fs, own=(k,))]
     reals = [E.Neg(*stream_scores(model, S["real_ami"], None, "all", "real_ami"), fs)] if real else []
     model.train()
-    return E.report(pos, negs, reals)
+    r = E.report(pos, negs, reals)
+    r["pos_max"] = [round(float(x), 5) for x in pos]  # per keyword region, in pos_*_meta.json order (this half)
+    return r
 
 
 def train(seed=0, steps=4000, bs=512, lr=1e-3, hidden=128, drop=0.0, wd=1e-2, val_every=500, out_tag="", emb_dir=None):

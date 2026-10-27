@@ -81,6 +81,15 @@ def budget(weight_bits, stride):
 # ("log", lo, hi)          log-uniform
 # Family-specific knobs are only sampled for that family.
 
+FRONTEND = {
+    # The chip's filterbank (model/frontend_var.py, research/06_probes F2). Each choice costs area,
+    # so it is scored against flip-flops, not just accuracy. lean5 bit widths are fixed (free cuts).
+    "bands": ("cat", [8, 10, 12, 14, 16, 20, 24]),  # mel-spaced bands; ~68 FF/band at 2nd order
+    # (lean5: ~55 FF/band, 4th order ~90); 8 -> -4.4 pts, 24 -> +1.1, 32 -> +1.8 on the 66-word probe
+    "order": ("cat", [2, 4]),  # 4 = two cascaded resonators per band: +2.8 pts, +~35 FF/band
+    "hop_ms": ("cat", [16, 32]),  # 16 vs 32 ms: -0.6 pts at 32 ms, halves the network's input rate
+}
+
 COMMON = {
     # --- size ----------------------------------------------------------------------------
     "budget_frac": ("float", 0.3, 1.0),  # fraction of budget() params to use; width is solved for it
@@ -249,7 +258,7 @@ def sample(trial, phase=1, families=None):
     """Optuna trial -> flat config dict. Family knobs are prefixed with the family name."""
     fams = families or list(FAMILIES)
     cfg = {"family": trial.suggest_categorical("family", fams)}
-    for k, spec in COMMON.items():
+    for k, spec in {**FRONTEND, **COMMON}.items():
         cfg[k] = _suggest(trial, k, spec)
     for k, spec in FAMILIES[cfg["family"]].items():
         cfg[f"{cfg['family']}.{k}"] = _suggest(trial, f"{cfg['family']}.{k}", spec)
@@ -266,7 +275,7 @@ def size_of_space():
     """Rough count of distinct configs (categoricals x 10 per continuous) per family."""
     def n(spec):
         return len(spec[1]) if spec[0] == "cat" else (spec[2] - spec[1] + 1 if spec[0] == "int" else 10)
-    base = math.prod(n(s) for s in COMMON.values()) * math.prod(
+    base = math.prod(n(s) for s in {**FRONTEND, **COMMON}.values()) * math.prod(
         n(s) for k, s in TRAIN.items() if k not in PHASE1_FIXED)
     return {f: base * math.prod(n(s) for s in F.values()) for f, F in FAMILIES.items()}
 
@@ -275,6 +284,6 @@ if __name__ == "__main__":
     for ws in (8, 4):
         print(f"{ws}-bit weights: max params by stride", {s: budget(ws, s) for s in (1, 2, 4)})
     print(f"on-chip working set at {TILES} tiles: {ON_CHIP_BYTES:.0f} B")
-    n_knobs = len(COMMON) + len(TRAIN) - len(PHASE1_FIXED)
+    n_knobs = len(FRONTEND) + len(COMMON) + len(TRAIN) - len(PHASE1_FIXED)
     for f, F in FAMILIES.items():
         print(f"{f:12s} {n_knobs + len(F):3d} knobs, ~{size_of_space()[f]:.1e} configs")
