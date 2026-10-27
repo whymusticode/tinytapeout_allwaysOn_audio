@@ -1,46 +1,53 @@
-"""The full search space for the architecture + training study (Optuna), for review.
+"""The search space for the architecture + training study, in two stages, for review.
 
 Read this file top to bottom: every searched knob is listed once, with its range and a
-one-line reason. Nothing here runs training; `sample(trial)` turns an Optuna trial into a
-config dict, and `budget()` is the hard 16-tile constraint every config must meet.
+one-line reason. Nothing here runs training; `sample_student(trial)` / `sample_detector(trial)`
+turn an Optuna trial (or any object with the same suggest_* methods) into a config dict, and
+`budget()` is the hard 16-tile constraint every config must meet.
 
-How the study runs (planned, model/tune.py):
-  * Sampler: Optuna TPE, multivariate + group (handles the conditional per-family knobs).
-  * Pruner: Hyperband on the existing validation (every 250 steps). A trial reports val_score
-    (mean FRR at 0.5/1/2 FA/h on the simulated val half) and is stopped early if it is in the
-    bottom 2/3 of trials at the same step. Min resource 750 steps, max 8000.
-  * Objective: val_score of the best checkpoint. Simulated test half and real data are
-    recorded for every trial but never seen by the sampler.
-  * Size: every trial is sized to the 16-tile hardware budget (`budget()`), not searched as a
-    free parameter. `budget_frac` sets how much of it a trial uses, so the study also learns
-    whether filling the budget helps.
-  * Word: one fixed word for the whole study (`telescope`, 3 syllables, mid-pack), so
-    architecture/training choices aren't confounded with word difficulty.
-  * Order: phase 0 probes (below) first, then ~200 trials of this space, then the top ~5
-    configs re-run with 3 seeds and scored on the simulated test half.
+Why two stages (research/06_probes, P5/P6): a student network on chip features, trained to
+reproduce Google's speech embedding (the teacher) on simulated audio, plus a small detector
+head, misses 31-33% of keywords at 5 FA/h against 61-69% for the same features trained from
+scratch. So the network is trained in two steps, and each gets its own search:
 
-Phase 0 probes (cheap, answer "where is the bottleneck?" before spending 200 trials):
-  P1 test-set difficulty: run the public openWakeWord and microWakeWord "hey jarvis" models on
-     our simulator's "hey jarvis" clips + our negative streams. If they also miss >50% at
-     1 FA/h, our test set is harder than theirs; if they get <10%, our models/features are
-     the problem.
-  P2 capacity ceiling: one big unconstrained model (~2M params, no budget) on our features.
-     Earlier ladder (arch_v1_recipe1): TCN 2k -> 295k params only moved sim FRR@1FA/h
-     0.68 -> 0.56, which says capacity is not the main bottleneck.
-  P3 front-end ceiling: same model on the same mixes with the front end varied one factor at
-     a time: bands 16/24/32/40, hop 16/10 ms, uint8 vs float. If it is much better, the front
-     end needs work, not the network. Area (yosys, our IIR filterbank, 68 FF per band):
-     16 bands 1,269 FF (~4 tiles), 24: 1,813, 32: 2,357, 40: 2,901 FF (~9 tiles). The hop costs
-     no area, but 10 ms frames leave 41 kB of QSPI per frame instead of 65 kB.
-  P4 data: the first run on the v3 data (30 voices) at the old best config, versus v2.
-  P5 teacher ceiling: frozen Google speech embedding (openWakeWord's backbone) + small head
-     trained on our simulated data: what a pretrained speech representation buys.
+  Stage A  STUDENT   chip features -> 96-d teacher embedding. Word-independent. Expensive
+                     (10-45 min per trial). Scored by how well it copies the teacher.
+  Stage B  DETECTOR  frozen student -> "was that the wake word?". Per word. Cheap (~20 s per
+                     head). Scored by FRR at FA/h. Not needed before tapeout.
+  Stage C  joint fine-tune of the finalists (student unfrozen, a little distillation loss
+           kept), 4-bit QAT if chosen. A handful of runs, no optimizer.
 
-Pretrained nets: see research/SOA.md section 10. Short version: none of them take our 16-band
-16 ms features, so copying early layers directly doesn't apply; they enter as (a) teachers for
-distillation (`distill_*` knobs), (b) the P1/P5 probes, (c) architecture templates
-(BC-ResNet, MixConv). Our own pretraining on simulated speech (`pretrain`) is the in-feature-
-space version of "start from a pretrained net".
+What tapeout freezes (Tiny Tapeout shuttle, ~2026-11-30): the weights live in QSPI flash and
+can be retrained after tapeout, so Stage A only has to settle the HARDWARE section below
+(front end, weight precision, output stride, which layer types the engine runs, where state
+lives) and show the best students fit the budget. Fine-grained tuning can wait.
+
+Stage A metric (decided 2026-10-27): cosine between student output and teacher embedding,
+on speech-bearing windows only (teacher-energy gate, so silence/music copying doesn't count).
+  * Training audio: simulated only (TTS conversation + ambience + rooms, train mixer).
+  * Selection (val): REAL audio. Distillation needs no labels, so any real recording is a
+    valid target: teacher(real audio) vs student(chip features of the same audio). See
+    STAGE_A_EVAL. This measures the sim-to-real gap directly; the simulated val (held-out
+    voices) is reported next to it.
+  * Final test: a disjoint set of real recordings (other corpus halves), read once per finalist.
+  * Guard against proxy drift: every ~10 trials, train a Stage B head on the current best
+    student and check FRR still follows the cosine (it did up to ~0.76: research/06_probes).
+
+Stage A plan (each step fixes what it settles before the next):
+  A0 control: same student trained from scratch as a 66-word classifier (no teacher) + head,
+     on the same audio. If it matches distillation, the teacher isn't what helps.
+  A1 front end: one fixed TCN student, FRONTEND grid (bands x order), 2 sizes.
+     Compare cosine against flip-flops (frontend_var.flipflops).
+  A2 families: each STAGE_A_FAMILIES family at 2 sizes (SIZES[1], SIZES[3]), ~6 trials each,
+     on the A1 front end. Answers which layer types the engine must run.
+  A3 size ladder for the top 2 families: all SIZES, both strides. The size/area curve.
+  A4 precision: 8-bit vs 4-bit QAT on the A3 winner at equal QSPI bytes.
+  A5 distillation knobs (DISTILL) on the winner: optimizer, loss, data, teacher_view.
+Trials stop early: rankings are visible by step ~3000 (06_probes distill logs), so a trial
+runs 3000 steps unless it is in the top third at that point, then continues to 10000.
+
+Pretrained nets: research/SOA.md section 10. None take our 16 ms IIR features, so they enter
+as teachers (`DISTILL.teacher`) and architecture templates, not as copied layers.
 """
 
 import math
@@ -66,45 +73,58 @@ def budget(weight_bits, stride):
         8-bit, stride 2: 131k           4-bit, stride 2: 262k
         8-bit, stride 4: 262k           4-bit, stride 4: 524k
     (the one-MAC-per-clock limit is 262k x stride, so it never binds first here)
-    PSRAM state traffic is subtracted per model by the builder (it knows its state size)."""
+    PSRAM state traffic is subtracted per model by the builder (it knows its state size).
+    Student + detector head together must fit; the head is small (Stage B keeps it <10%)."""
     qspi = QSPI_BYTES_PER_FRAME * stride * 8 / weight_bits
     macs = MACS_PER_FRAME * stride
     return int(min(qspi, macs))
 
 
-# ======================================================================================
-# 2. The space
-# ======================================================================================
 # ("cat", [...])           categorical
 # ("int", lo, hi[, step])  integer
 # ("float", lo, hi)        uniform
 # ("log", lo, hi)          log-uniform
 # Family-specific knobs are only sampled for that family.
 
+# ======================================================================================
+# 2. HARDWARE: frozen at tapeout (Stage A must settle these)
+# ======================================================================================
 FRONTEND = {
     # The chip's filterbank (model/frontend_var.py, research/06_probes F2). Each choice costs area,
-    # so it is scored against flip-flops, not just accuracy. lean5 bit widths are fixed (free cuts).
-    "bands": ("cat", [8, 10, 12, 14, 16, 20, 24]),  # mel-spaced bands; ~68 FF/band at 2nd order
-    # (lean5: ~55 FF/band, 4th order ~90); 8 -> -4.4 pts, 24 -> +1.1, 32 -> +1.8 on the 66-word probe
+    # so it is scored against flip-flops, not just accuracy. lean5 bit widths are fixed (free cuts:
+    # pcm 12, Q2.8 coefs, state 18, acc 20, 6-bit log codes at 1/4 octave; no loss on the probe).
+    "bands": ("cat", [8, 10, 12, 14, 16, 20, 24]),  # mel-spaced bands; ~55 FF/band (lean5, 2nd
+    # order), ~90 at 4th; 66-word probe: 8 -> -4.4 pts, 12 (4th) -1.0 vs 16 (4th), 24 -> +1.1
     "order": ("cat", [2, 4]),  # 4 = two cascaded resonators per band: +2.8 pts, +~35 FF/band
-    "hop_ms": ("cat", [16, 32]),  # 16 vs 32 ms: -0.6 pts at 32 ms, halves the network's input rate
+    "hop_ms": ("cat", [16, 32]),  # filterbank frame; 32 ms: -0.6 pts, halves the input rate
 }
+FRONTEND_DEFAULT = {"bands": 12, "order": 4, "hop_ms": 16}  # lean5o4b12: 54.2% at 1,248 FF
 
-COMMON = {
-    # --- size ----------------------------------------------------------------------------
-    "budget_frac": ("float", 0.3, 1.0),  # fraction of budget() params to use; width is solved for it
-    "weight_bits": ("cat", [8, 4]),  # 4-bit = QAT, doubles the params the bus allows
-    # --- input ---------------------------------------------------------------------------
+ENGINE = {
+    "weight_bits": ("cat", [8, 4]),  # 4-bit = QAT, doubles the params the bus allows (A4)
+    "stride": ("cat", [1, 2, 4]),  # network output every 16/32/64 ms (frames stacked at the input)
+    "state_in_psram": ("cat", [False, True]),  # long state (conv history, recurrent state, KV
+    # cache) in PSRAM: frees on-chip bytes, costs bus bandwidth (builder subtracts it from budget)
+}
+ENGINE_DEFAULT = {"weight_bits": 8, "stride": 2, "state_in_psram": True}
+
+# ======================================================================================
+# 3. Stage A: STUDENT (chip features -> teacher embedding)
+# ======================================================================================
+# Size is held at fixed constants, not searched: the optimizer would otherwise always pick
+# the largest model, and smaller is what we want on chip. Small models are not much faster
+# on this GPU (45k -> 330k params cost 1.7x wall time), so the ladder is about the area/
+# accuracy curve, not speed. Params include the final projection to the teacher's 96 dims.
+SIZES = (12_000, 25_000, 50_000, 100_000, 200_000)  # ~2x steps; 8-bit stride 2 allows 131k
+
+STUDENT_COMMON = {
     "in_norm": ("cat", ["global", "running_mean", "pcen_lite"]),  # running per-band mean in the log
     # domain (cheap on chip): level/channel robustness, the classic far-field fix (PCEN)
     "in_norm_tau_s": ("log", 0.3, 5.0),  # time constant for running_mean / pcen_lite
-    "in_deltas": ("cat", [False, True]),  # append frame-to-frame differences (16 more inputs)
-    "stride": ("cat", [1, 2, 4]),  # output every 16/32/64 ms (frames stacked at the input)
-    # --- head / post-processing ---------------------------------------------------------
-    "head_hidden": ("cat", [0, 16, 32]),  # 0 = linear readout
-    "smooth": ("int", 1, 8),  # moving average over the last n outputs before the threshold
-    # (Google [G1] and microWakeWord use this); free at inference, tuned with the model
+    "in_deltas": ("cat", [False, True]),  # append frame-to-frame differences (bands more inputs)
+    "out_proj": ("cat", ["linear", "bottleneck32"]),  # last layer to 96 dims, direct or via 32
 }
+# Constraint (builder): receptive field >= 0.8 s, the teacher's window (76 x 10 ms + 25 ms).
 
 FAMILIES = {
     # Apple 2017 first stage [SOA A1]: a DNN over a fixed window of past frames.
@@ -120,8 +140,6 @@ FAMILIES = {
         "layers": ("int", 1, 3),
         "residual": ("cat", [False, True]),
         "proj": ("cat", [0, 0.5]),  # LSTMP-style output projection (Google's LSTM KWS)
-        "state_in_psram": ("cat", [False, True]),  # frees on-chip bytes for width, costs bus
-        "prefix_windows": ("int", 0, 2),  # stateful training: preceding negative windows
     },
     # Linear recurrences trained in parallel, run as a recurrence: S4D / LRU / Mamba-lite.
     # minGRU (one of these) failed earlier only with per-frame norm; retried with in_norm options.
@@ -131,9 +149,9 @@ FAMILIES = {
         "state": ("cat", [8, 16, 32, 64]),  # per-channel state size (lru/s4d/mamba)
         "expand": ("cat", [1, 2]),
         "conv_k": ("cat", [0, 3, 4]),  # short causal conv before the scan (Mamba-style)
-        "prefix_windows": ("int", 0, 2),
     },
     # Dilated causal conv stack: TC-ResNet / microWakeWord MixedNet / WaveNet family.
+    # The 06_probes student is this family: separable, kernel 3, dilations 1,2,4,8 x2, BN.
     "tcn": {
         "depth": ("int", 3, 10),
         "kernel": ("cat", [3, 5, 7, "mix357"]),  # mix = MixConv: kernels split across channels
@@ -177,68 +195,104 @@ FAMILIES = {
         "conv_kernel": ("cat", [3, 5]),
         "back": ("cat", ["gru", "lru", "attention"]),
         "back_layers": ("int", 1, 2),
-        "prefix_windows": ("int", 0, 2),
     },
 }
+# A2 searches these; dnn and svdf get one baseline trial per size (weak or superseded in
+# the earlier ladder), lstm/mamba_lite are left to A5 if their family wins.
+STAGE_A_FAMILIES = ("tcn", "bcresnet", "rnn", "ssm", "transformer", "crnn")
 
-TRAIN = {
+DISTILL = {
+    # --- teacher / targets ---------------------------------------------------------------
+    "teacher": ("cat", ["speech_embedding", "whisper_tiny_enc"]),  # Google's (openWakeWord
+    # backbone, 96-d / 80 ms) first; Whisper-tiny encoder (384-d / 20 ms, pooled) if A0-A3 stall
+    "teacher_view": ("cat", ["same", "clean"]),  # teacher hears the same mix as the student, or
+    # the clean close-talk source of it (simulator renders both): "clean" teaches the student
+    # to output what the teacher would say without the noise/distance (denoising distillation)
+    "target_norm": ("cat", ["none", "standardize", "whiten"]),  # per-dim scaling of the targets
+    # --- loss ----------------------------------------------------------------------------
+    "loss_cos": ("float", 0.0, 1.0),  # weight of (1 - cosine); MSE gets 1 - loss_cos
+    "speech_weight": ("float", 1.0, 4.0),  # up-weight speech-bearing windows (teacher-energy gate)
+    # --- data ----------------------------------------------------------------------------
+    "audio_hours": ("cat", [25, 50, 100, 200]),  # simulated audio with teacher targets (~3 min
+    # CPU per 25 h; ~100 MB per 25 h on disk)
+    "speech_share": ("float", 0.5, 0.9),  # conversation vs ambience-only windows
     # --- optimiser -----------------------------------------------------------------------
     "optimizer": ("cat", ["adamw", "lion"]),
     "lr": ("log", 3e-4, 1e-2),  # lion uses lr/5
     "weight_decay": ("log", 1e-4, 1e-1),
-    "beta2": ("cat", [0.98, 0.999]),
     "warmup": ("cat", [100, 300, 1000]),
     "schedule": ("cat", ["cosine", "onecycle", "constant"]),
-    "batch": ("cat", [256, 512, 1024, 2048]),
+    "batch": ("cat", [256, 384, 512, 1024]),
     "grad_clip": ("cat", [0.5, 1.0, 5.0]),
     "ema": ("cat", [0.0, 0.999]),  # evaluate an exponential moving average of the weights
-    "dropout": ("float", 0.0, 0.3),
+    "dropout": ("float", 0.0, 0.2),
+    # --- augmentation (student input only; teacher targets stay fixed) ------------------
+    "aug_gain_db": ("float", 0.0, 12.0),  # whole-window level shift (level robustness)
+    "aug_tilt": ("float", 0.0, 1.0),  # spectral tilt (mic / distance colouring)
+    "aug_band_mask_p": ("float", 0.0, 0.4),
+    # --- quantisation --------------------------------------------------------------------
+    "qat_start": ("float", 0.3, 0.8),  # fraction of training before fake-quant (4-bit only)
+}
+# Phase 06_probes defaults (what produced 0.700-0.788): teacher speech_embedding, view same,
+# no target norm, MSE + cosine, ~75 h of windows, adamw, batch 256-384, 10000 steps.
+
+STAGE_A_EVAL = {
+    # Every trial reports all of these; selection uses "real_val".
+    "sim_val": "multi_test (held-out voices, simtest mixer)",
+    "real_val": "AMI far-field meetings (first half of meetings) + LibriSpeech dev-clean + "
+                "MUSAN speech (half), through the chip front end; teacher on the same audio",
+    "real_test": "AMI (other half of meetings, not the real_ami FA stream) + LibriSpeech "
+                 "test-clean + MUSAN speech (other half); read once per finalist",
+    "steps": "every 500 steps; prune at 3000 if not in the top third",
+    "also_logged": "params, flip-flops (front end), QSPI bytes/step, on-chip bytes, receptive field",
+}
+
+# ======================================================================================
+# 4. Stage B: DETECTOR (frozen student -> wake word). Not run before tapeout.
+# ======================================================================================
+DETECTOR = {
+    # --- head (must fit next to the student: <10% of the budget) ------------------------
+    "head_context": ("cat", [4, 6, 10, 16]),  # student outputs the head sees (x stride x 16 ms)
+    "head_kind": ("cat", ["mlp", "conv1d", "gru"]),
+    "head_hidden": ("cat", [0, 8, 16, 32, 64]),  # 0 = linear readout; 06_probes used 64 (66k
+    # params, too big for the chip next to a 45k student)
+    "head_dropout": ("float", 0.0, 0.4),  # 0.3 best in 06_probes
+    "student_tune": ("cat", ["frozen", "last_block", "all"]),  # "all" is Stage C territory
+    "smooth": ("int", 1, 8),  # moving average over the last n outputs before the threshold
+    # (Google [G1] and microWakeWord use this); free at inference
+    # --- optimiser -----------------------------------------------------------------------
+    "lr": ("log", 1e-4, 3e-3),  # 3e-4 best in 06_probes
+    "weight_decay": ("log", 1e-3, 3e-1),  # 0.1 best
+    "steps": ("cat", [1500, 3000, 6000]),
+    "batch": ("cat", [256, 512, 1024]),
+    "seed": ("cat", [0, 1, 2]),  # heads are cheap: average seeds on every trial
     # --- loss ----------------------------------------------------------------------------
-    "pos_frac": ("float", 0.2, 0.6),  # share of keyword windows per batch (now 0.5)
-    "pos_pool": ("cat", ["max", "logsumexp", "mean_top3"]),  # how a window's frames become one score
-    "pos_last": ("int", 6, 40),  # frames after the keyword end allowed to fire (now 14)
-    "neg_frame_weight": ("float", 0.0, 1.0),  # every-frame negative BCE (now 1)
-    "neg_max_weight": ("float", 0.5, 2.0),  # max-over-window negative BCE (now 1)
+    "pos_frac": ("float", 0.2, 0.6),  # share of keyword windows per batch
+    "pos_pool": ("cat", ["max", "logsumexp", "mean_top3"]),  # how a window's steps become one score
+    "pos_last": ("int", 2, 12),  # student steps after the keyword end allowed to fire
+    "neg_frame_weight": ("float", 0.0, 1.0),  # every-step negative BCE
+    "neg_max_weight": ("float", 0.5, 2.0),  # max-over-window negative BCE
     "focal_gamma": ("float", 0.0, 2.0),
     "label_smooth": ("float", 0.0, 0.1),
-    # --- negatives -----------------------------------------------------------------------
-    # relative weights of the negative groups (normalised); now .35/.10/.25/.10/.20
+    # --- negatives (the 1 FA/h gap is here: research/06_probes, conditions table) --------
+    "neg_windows": ("cat", [25_000, 100_000, 400_000, 1_600_000]),  # conversation windows with
+    # student embeddings; 06_probes had ~25k vs openWakeWord's thousands of hours
     "w_convo": ("float", 0.05, 1.0),
     "w_near": ("float", 0.05, 1.0),  # near-miss words ("telescope" vs "microscope")
-    "w_other": ("float", 0.05, 1.0),  # the other 65 candidate words
+    "w_other": ("float", 0.05, 1.0),  # the other candidate words
     "w_partial": ("float", 0.05, 1.0),  # keyword cut in half
     "w_amb": ("float", 0.05, 1.0),  # ambience only
     "mine_every": ("cat", [250, 500, 1000, 0]),  # 0 = no hard-negative mining
     "mine_frac": ("float", 0.1, 0.5),
     "mine_keep": ("cat", [1024, 4096, 16384]),
-    # --- augmentation (GPU, on features) -------------------------------------------------
-    "aug_tilt": ("float", 0.0, 1.0),  # spectral tilt (mic / distance colouring)
-    "aug_jitter": ("float", 0.0, 0.5),  # per-band gain jitter
-    "aug_gain_db": ("float", 0.0, 12.0),  # whole-window level shift (level robustness)
-    "aug_band_mask_p": ("float", 0.0, 0.6),
-    "aug_band_mask_n": ("int", 1, 3),
-    "aug_time_mask_p": ("float", 0.0, 0.5),  # SpecAugment time mask (up to 8 frames)
-    "aug_time_shift": ("int", 0, 8),  # frames the keyword end can move
-    "aug_mixup_p": ("float", 0.0, 0.3),  # mix a negative window under a positive (feature domain)
-    # --- quantisation --------------------------------------------------------------------
-    "qat_start": ("float", 0.3, 0.8),  # fraction of training before fake-quant turns on (4-bit)
-    # --- pretraining / distillation (phase 2; needs teacher targets precomputed) ---------
-    "pretrain": ("cat", ["none", "multiword", "phone_ctc"]),  # our own pretraining on simulated
-    # speech: classify all 66 candidate words, or phone posteriors from Piper's phonemes (free
-    # labels), then fine-tune on the target word. Apple's first stage is a phonetic model.
-    "distill": ("cat", ["none", "speech_embedding", "whisper_tiny"]),  # teacher outputs on our
-    # simulated audio; the student never sees real speech, only the teacher's predictions
-    "distill_weight": ("float", 0.1, 1.0),
-    "seed": ("cat", [0]),  # seeds are repeated only for the finalists
+    # --- augmentation (on student embeddings) -------------------------------------------
+    "aug_noise": ("float", 0.0, 0.2),  # gaussian on embeddings (0.05 in 06_probes)
+    "aug_time_shift": ("int", 0, 3),  # steps the keyword end can move
+    "aug_mixup_p": ("float", 0.0, 0.3),
 }
-
-# Fixed for the whole study (not searched): word=telescope, data cache v3, frames 16 ms x 16
-# bands uint8 (the chip front end), window 1.6 s, VAL_EVERY 250, patience 8, max 8000 steps,
-# metric = mean FRR at 0.5/1/2 FA/h on the simulated val half.
-
-# Phase 1 searches COMMON + FAMILIES + TRAIN except pretrain/distill (fixed to "none").
-# Phase 2 adds them for the top families once teacher targets and pretraining runs exist.
-PHASE1_FIXED = {"pretrain": "none", "distill": "none", "distill_weight": 0.0, "seed": 0}
+# Fixed for Stage B: word=telescope (then the candidate list), metric = mean FRR at 1/2/5 FA/h
+# on the simulated val half, ~2,000 test keywords (06_probes had 297: +-5-7 pts), reported by
+# condition (good: <=1.2 m, open, SNR>=10 dB / OK: <=2.5 m, open, SNR>=0 / all).
 
 
 def _suggest(trial, name, spec):
@@ -254,36 +308,48 @@ def _suggest(trial, name, spec):
     raise ValueError(kind)
 
 
-def sample(trial, phase=1, families=None):
-    """Optuna trial -> flat config dict. Family knobs are prefixed with the family name."""
-    fams = families or list(FAMILIES)
-    cfg = {"family": trial.suggest_categorical("family", fams)}
-    for k, spec in {**FRONTEND, **COMMON}.items():
+def sample_student(trial, size, families=STAGE_A_FAMILIES, frontend=None, engine=None, search_distill=False):
+    """Stage A trial -> flat config. `size` is a SIZES constant (not searched). Pass frontend/
+    engine dicts to hold them fixed (A2, A3), or None to search them (A1, A4). DISTILL knobs
+    are searched only in A5; otherwise they take the 06_probes defaults (None here)."""
+    cfg = {"stage": "A", "size": size, "family": trial.suggest_categorical("family", list(families))}
+    for space, fixed in ((FRONTEND, frontend), (ENGINE, engine)):
+        for k, spec in space.items():
+            cfg[k] = fixed[k] if fixed is not None else _suggest(trial, k, spec)
+    for k, spec in STUDENT_COMMON.items():
         cfg[k] = _suggest(trial, k, spec)
     for k, spec in FAMILIES[cfg["family"]].items():
         cfg[f"{cfg['family']}.{k}"] = _suggest(trial, f"{cfg['family']}.{k}", spec)
-    for k, spec in TRAIN.items():
-        if phase == 1 and k in PHASE1_FIXED:
-            cfg[k] = PHASE1_FIXED[k]
-        else:
-            cfg[k] = _suggest(trial, k, spec)
-    cfg["max_params"] = int(cfg["budget_frac"] * budget(cfg["weight_bits"], cfg["stride"]))
+    for k, spec in DISTILL.items():
+        cfg[k] = _suggest(trial, k, spec) if search_distill else None
+    cfg["max_params"] = budget(cfg["weight_bits"], cfg["stride"])
+    cfg["fits"] = size <= cfg["max_params"]
     return cfg
 
 
+def sample_detector(trial, student_run):
+    """Stage B trial -> flat config, on top of a finished Stage A run (its id)."""
+    cfg = {"stage": "B", "student": student_run}
+    for k, spec in DETECTOR.items():
+        cfg[k] = _suggest(trial, k, spec)
+    return cfg
+
+
+def _n(spec):
+    return len(spec[1]) if spec[0] == "cat" else (spec[2] - spec[1] + 1 if spec[0] == "int" else 10)
+
+
 def size_of_space():
-    """Rough count of distinct configs (categoricals x 10 per continuous) per family."""
-    def n(spec):
-        return len(spec[1]) if spec[0] == "cat" else (spec[2] - spec[1] + 1 if spec[0] == "int" else 10)
-    base = math.prod(n(s) for s in {**FRONTEND, **COMMON}.values()) * math.prod(
-        n(s) for k, s in TRAIN.items() if k not in PHASE1_FIXED)
-    return {f: base * math.prod(n(s) for s in F.values()) for f, F in FAMILIES.items()}
+    """Rough count of distinct configs (categoricals x 10 per continuous)."""
+    a = math.prod(_n(s) for s in {**FRONTEND, **ENGINE, **STUDENT_COMMON, **DISTILL}.values())
+    return {"A:" + f: a * math.prod(_n(s) for s in F.values()) for f, F in FAMILIES.items()} | {
+        "B": math.prod(_n(s) for s in DETECTOR.values())}
 
 
 if __name__ == "__main__":
     for ws in (8, 4):
         print(f"{ws}-bit weights: max params by stride", {s: budget(ws, s) for s in (1, 2, 4)})
     print(f"on-chip working set at {TILES} tiles: {ON_CHIP_BYTES:.0f} B")
-    n_knobs = len(FRONTEND) + len(COMMON) + len(TRAIN) - len(PHASE1_FIXED)
-    for f, F in FAMILIES.items():
-        print(f"{f:12s} {n_knobs + len(F):3d} knobs, ~{size_of_space()[f]:.1e} configs")
+    print("sizes", SIZES, "fit at defaults:", [s <= budget(8, 2) for s in SIZES])
+    for k, v in size_of_space().items():
+        print(f"{k:16s} ~{v:.1e} configs")
