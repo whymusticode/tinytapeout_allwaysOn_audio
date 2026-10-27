@@ -73,7 +73,7 @@ def embed_set(src, dst, n_proc=16):
     """Teacher embeddings (N, 11, 96) of a set of 1.6 s windows (data/probe/<src>)."""
     if store.exists(EMB / dst):
         return
-    n = len(store.load(PROBE / src)["tag"])
+    n = len(store.load(PROBE / src)["audio"])
     out = [None] * n
     jobs = [(i, min(n, i + 256), src) for i in range(0, n, 256)]
     with Pool(n_proc) as pool:

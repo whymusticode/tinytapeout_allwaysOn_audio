@@ -4,6 +4,7 @@ exactly the same data.
 
   python model/probe_data.py streams      # evaluation streams (all probes)
   python model/probe_data.py windows      # training windows for one word (front-end probes)
+  python model/probe_data.py real         # real-audio windows for Stage A validation / test
 
 data/probe/streams/<name>/   audio int16 (16 kHz), tag int16 per 10 ms, chunk sample offsets
   pos_<slug>     held-out-voice keyword clips at a distance over ambience, 1.5-3.5 s apart
@@ -13,6 +14,11 @@ data/probe/streams/<name>/   audio int16 (16 kHz), tag int16 per 10 ms, chunk sa
   real_ami       AMI far-field meetings, untouched
 data/probe/windows_<slug>/   audio int16 (N, 25600), tag int32, contains: training windows
   (simulator train mode), positives = the word, negatives as in build_cache.
+
+data/probe/real_{val,test}/   audio int16 (N, 25600), src int8 (0 AMI, 1 LibriSpeech, 2 MUSAN):
+  real recordings for distillation (teacher vs student on the same audio, no labels needed).
+  AMI meetings after the ones real_ami uses, alternating val/test by meeting; LibriSpeech
+  dev-clean = val, test-clean = test; MUSAN speech crops split in halves.
 
 Chunks are 60 s; even chunks are the validation half, odd chunks the test half.
 """
@@ -259,9 +265,47 @@ def metas():
         print(f"pos_{slug(w)}: {len(rows)} clips", file=sys.stderr)
 
 
+def real(n_ami=6000, n_libri=3000, seed=7):
+    """1.6 s windows of real recordings for Stage A (see module docstring)."""
+    rng = np.random.default_rng(seed)
+    pools = ROOT / "data/pools"
+    W = mix.WIN
+    ami = store.load(pools / "ami_test")
+    off = np.asarray(ami["offsets"])
+    used = {s for _, s, _ in bs.real_ami_jobs()[: 8 * 60]}  # real_ami (Stage B false alarms)
+    first_free = next(m for m in range(len(off) - 1) if not any(off[m] <= s < off[m + 1] for s in used) and off[m] > max(used))
+    meetings = list(range(first_free, len(off) - 1))
+    lib = store.load(pools / "libri_test")
+    loff = np.asarray(lib["offsets"])
+    n_dev = len(list((ROOT / "data/raw/librispeech_dev").glob("LibriSpeech/**/*.flac")))  # dev first in the pool
+    mus = np.asarray(store.load(pools / "speech_test")["audio"])
+    for split, part in (("val", 0), ("test", 1)):
+        X, src = [], []
+        ms = meetings[part::2]
+        for _ in range(n_ami):  # whole-meeting audio, silence included (far-field, as on the device)
+            m = ms[rng.integers(len(ms))]
+            s = rng.integers(off[m], off[m + 1] - W)
+            X.append(np.asarray(ami["audio"][s : s + W]))
+            src.append(0)
+        utts = range(0, n_dev) if part == 0 else range(n_dev, len(loff) - 1)
+        for u in rng.choice(list(utts), n_libri):
+            a = np.asarray(lib["audio"][loff[u] : loff[u + 1]])
+            s = rng.integers(0, max(1, len(a) - W))
+            X.append(np.pad(a[s : s + W], (0, max(0, W - len(a)))))
+            src.append(1)
+        half = len(mus) // 2
+        for c in range(half * part, half * (part + 1)):
+            for s in (0, mus.shape[1] - W):
+                X.append(mus[c, s : s + W])
+                src.append(2)
+        store.save(OUT / f"real_{split}", audio=np.stack(X).astype(np.int16), src=np.array(src, np.int8))
+        print(f"real_{split}: {len(X)} windows; AMI meetings {[str(ami['meeting'][m]) for m in ms][:3]}.. ({len(ms)})",
+              file=sys.stderr)
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("what", choices=["streams", "windows", "meta", "multi"])
+    ap.add_argument("what", choices=["streams", "windows", "meta", "multi", "real"])
     ap.add_argument("--word", default="telescope")
     ap.add_argument("--jobs", type=int, default=20)
     ap.add_argument("--convo-h", type=float, default=6)
@@ -272,6 +316,8 @@ if __name__ == "__main__":
         metas()
     elif args.what == "multi":
         multi(args.jobs)
+    elif args.what == "real":
+        real()
     elif args.what == "streams":
         streams(args.jobs, args.convo_h, args.ami_h)
     else:

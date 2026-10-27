@@ -1,0 +1,15 @@
+{"name": "A1 b12 o4 h16 tcn50k", "group": "A1", "size": 50000, "bands": 12, "order": 4, "hop_ms": 16, "max_steps": 6000, "prune_step": 1000000000}
+{"name": "A1 b16 o4 h16 tcn50k", "group": "A1", "size": 50000, "bands": 16, "order": 4, "hop_ms": 16, "max_steps": 6000, "prune_step": 1000000000}
+{"name": "A1 b12 o4 h32 tcn50k", "group": "A1", "size": 50000, "bands": 12, "order": 4, "hop_ms": 32, "max_steps": 6000, "prune_step": 1000000000}
+{"name": "A1 b8 o4 h16 tcn50k", "group": "A1", "size": 50000, "bands": 8, "order": 4, "hop_ms": 16, "max_steps": 6000, "prune_step": 1000000000}
+{"name": "A1 b24 o4 h16 tcn50k", "group": "A1", "size": 50000, "bands": 24, "order": 4, "hop_ms": 16, "max_steps": 6000, "prune_step": 1000000000}
+{"name": "A1 b10 o4 h16 tcn50k", "group": "A1", "size": 50000, "bands": 10, "order": 4, "hop_ms": 16, "max_steps": 6000, "prune_step": 1000000000}
+{"name": "A1 b14 o4 h16 tcn50k", "group": "A1", "size": 50000, "bands": 14, "order": 4, "hop_ms": 16, "max_steps": 6000, "prune_step": 1000000000}
+{"name": "A1 b20 o4 h16 tcn50k", "group": "A1", "size": 50000, "bands": 20, "order": 4, "hop_ms": 16, "max_steps": 6000, "prune_step": 1000000000}
+{"name": "A1 b12 o2 h16 tcn50k", "group": "A1", "size": 50000, "bands": 12, "order": 2, "hop_ms": 16, "max_steps": 6000, "prune_step": 1000000000}
+{"name": "A1 b16 o2 h16 tcn50k", "group": "A1", "size": 50000, "bands": 16, "order": 2, "hop_ms": 16, "max_steps": 6000, "prune_step": 1000000000}
+{"name": "A1 b8 o2 h16 tcn50k", "group": "A1", "size": 50000, "bands": 8, "order": 2, "hop_ms": 16, "max_steps": 6000, "prune_step": 1000000000}
+{"name": "A1 b24 o2 h16 tcn50k", "group": "A1", "size": 50000, "bands": 24, "order": 2, "hop_ms": 16, "max_steps": 6000, "prune_step": 1000000000}
+{"name": "A1 b10 o2 h16 tcn50k", "group": "A1", "size": 50000, "bands": 10, "order": 2, "hop_ms": 16, "max_steps": 6000, "prune_step": 1000000000}
+{"name": "A1 b14 o2 h16 tcn50k", "group": "A1", "size": 50000, "bands": 14, "order": 2, "hop_ms": 16, "max_steps": 6000, "prune_step": 1000000000}
+{"name": "A1 b20 o2 h16 tcn50k", "group": "A1", "size": 50000, "bands": 20, "order": 2, "hop_ms": 16, "max_steps": 6000, "prune_step": 1000000000}
