@@ -3,7 +3,7 @@ project:
   title:        "Open always-on wake-word detector"      # Project title
   author:       "Michael Benton"      # Your name
   discord:      ""      # Your discord username, for communication and automatically assigning you a Tapeout role (optional)
-  description:  "PDM mic front end + VAD, growing into an open always-on keyword spotter"      # One line description of what your project does
+  description:  "PDM mic front end, VAD, audio buffer and filterbank, growing into an open always-on keyword spotter"      # One line description of what your project does
   language:     "Verilog" # other examples include SystemVerilog, Amaranth, VHDL, etc
   clock_hz:     16384000      # Clock frequency in Hz (or 0 if not applicable)
 
@@ -21,19 +21,21 @@ project:
     - "pdm_cic.v"
     - "vad.v"
     - "audio_ring.v"
+    - "filterbank.v"
+    - "spi_cfg.v"
 
 # The pinout of your project. Leave unused pins blank. DO NOT delete or add any pins.
 # This section is for the datasheet/website. Use descriptive names (e.g., RX, TX, MOSI, SCL, SEG_A, etc.).
 pinout:
   # Inputs
   ui[0]: "PDM_DATA"
-  ui[1]: "PDM_EDGE"
+  ui[1]: "PDM_CLK_IN"
   ui[2]: "STREAM_REQ"
-  ui[3]: "SPI_CS_N (reserved)"
-  ui[4]: "SPI_MOSI (reserved)"
-  ui[5]: "VAD_THR[0]"
-  ui[6]: "VAD_THR[1]"
-  ui[7]: "VAD_THR[2]"
+  ui[3]: "SPI_CS_N"
+  ui[4]: "SPI_SCK"
+  ui[5]: "SPI_MOSI"
+  ui[6]: "PDM_EXT"
+  ui[7]: "PDM_EDGE"
 
   # Outputs
   uo[0]: "WAKE_IRQ (reserved)"
@@ -41,9 +43,9 @@ pinout:
   uo[2]: "AUDIO_TX"
   uo[3]: "VAD"
   uo[4]: "STREAMING"
-  uo[5]: ""
-  uo[6]: ""
-  uo[7]: ""
+  uo[5]: "SPI_MISO"
+  uo[6]: "DEBUG0"
+  uo[7]: "DEBUG1"
 
   # Bidirectional pins
   uio[0]: "QSPI_CS0 flash"

@@ -5,6 +5,13 @@ pre-roll. The PSRAM is a behavioural APS6404L (SPI mode, commands 0x66/0x99/0x02
 that also checks the device rules the RTL must respect: reset before use, CE# low at most
 8 us, mode-0 timing. The UART receiver decodes 8N1 at clk/16.
 
+MISO round trip: the model can return each read bit `miso_ns` after the clock edge that
+drops SCK, the lumped delay of TT mux + pads + PSRAM tCO + board. From the hold time
+(MISO_HOLD_NS, the shortest round trip) until then it drives the wrong bit, so a sample
+taken too early is a guaranteed mismatch. 110 ns is past the 61 ns budget of rising-edge
+sampling and inside the 122 ns of miso_late = 1 (see audio_ring.v). Both edges are tested;
+miso_late = 0 with a 110 ns round trip must fail (it shows the delay model bites).
+
 Checks: the stream starts with "WAKE", then the samples from PRE before the request,
 contiguous, continuing with live samples until the request drops; a second request
 starts a fresh session.
@@ -14,18 +21,20 @@ import random
 
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import ClockCycles, FallingEdge, RisingEdge
+from cocotb.triggers import ClockCycles, FallingEdge, RisingEdge, Timer
 
 CLK_HZ = 16_384_000
 PRE = 64
 BAUD_CLKS = 16
 SAMPLE_EVERY = 1024  # clock cycles between PCM samples, as in the chip (16 kHz)
 CE_MAX_CLKS = int(8e-6 * CLK_HZ)  # APS6404L tCEM
+MISO_HOLD_NS = 5  # shortest round trip: two pads + PSRAM tOH, conservatively
 
 
 class PSRAM:
-    def __init__(self, dut):
+    def __init__(self, dut, miso_ns=0):
         self.dut = dut
+        self.miso_ns = miso_ns
         self.mem = {}
         self.reset_seen = False
         self.max_ce = 0
@@ -52,12 +61,23 @@ class PSRAM:
                         out_bits = [(word >> (15 - i)) & 1 for i in range(16)]
                     if out_bits is not None:
                         k = len(bits_in) - 32
-                        dut.spi_miso.value = out_bits[k] if 0 <= k < 16 else 0
+                        bit = out_bits[k] if 0 <= k < 16 else 0
+                        if self.miso_ns:
+                            cocotb.start_soon(self._drive_late(bit))
+                        else:
+                            dut.spi_miso.value = bit
                 self._sck = int(dut.spi_sck.value)
             self._sck = 0
             ce = (cocotb.utils.get_sim_time("ns") - t0) * 1e-9 * CLK_HZ
             self.max_ce = max(self.max_ce, ce)
             self._finish(bits_in)
+
+    async def _drive_late(self, bit):
+        hold = min(MISO_HOLD_NS, self.miso_ns)
+        await Timer(hold, unit="ns")
+        self.dut.spi_miso.value = 1 - bit  # invalid window: wrong on purpose
+        await Timer(self.miso_ns - hold, unit="ns")
+        self.dut.spi_miso.value = bit
 
     @staticmethod
     def _val(bits):
@@ -137,14 +157,27 @@ def check_session(got, written, n_at_req):
 
 
 @cocotb.test()
-async def test_ring_stream(dut):
+@cocotb.parametrize(miso_late=[1, 0], miso_ns=[0, 55, 110])
+async def test_ring_stream(dut, miso_late, miso_ns):
+    if not miso_late and miso_ns > 61:
+        try:
+            await ring_stream(dut, miso_late, miso_ns)
+        except AssertionError as e:
+            dut._log.info(f"failed as expected with rising-edge sampling: {str(e)[:80]}")
+            return
+        raise AssertionError("a 110 ns round trip should break rising-edge sampling")
+    await ring_stream(dut, miso_late, miso_ns)
+
+
+async def ring_stream(dut, miso_late, miso_ns):
     cocotb.start_soon(Clock(dut.clk, 61, unit="ns").start())
     dut.rst_n.value = 0
     dut.pcm.value = 0
     dut.pcm_valid.value = 0
     dut.stream_req.value = 0
     dut.spi_miso.value = 0
-    ram = PSRAM(dut)
+    dut.miso_late.value = miso_late
+    ram = PSRAM(dut, miso_ns)
     cocotb.start_soon(ram.run())
     rx = []
     cocotb.start_soon(uart_rx(dut, rx))

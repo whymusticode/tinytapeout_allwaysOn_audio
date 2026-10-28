@@ -34,6 +34,7 @@ module vad #(
   wire signed [19:0] step = diff >>> ENV_SHIFT;
 
   assign envelope = env[18:4];
+  wire _unused = step[19];  // the sign; env + step stays in 0 .. 2^19 - 1
 
   always @(posedge clk) begin
     if (!rst_n) begin

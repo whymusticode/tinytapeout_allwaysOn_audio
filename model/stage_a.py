@@ -54,7 +54,7 @@ BOOK = ROOT / "research/stage_a"
 QUEUE, LEDGER = BOOK / "queue.jsonl", BOOK / "ledger.jsonl"
 DEV = "cuda"
 EVAL_EVERY = 500
-LEAN5 = dict(pcm_bits=12, coef_frac=8, y_w=18, log_frac=2, acc_w=20, acc_shift=4, feat_bits=6)
+LEAN5 = FV.LEAN5
 
 DEFAULTS = {
     "group": "misc", "size": 50_000, "family": "tcn", "knobs": {},

@@ -18,6 +18,18 @@
  * {cmd 8, addr 24, data 16} = 48 SCK cycles at clk/2 = 5.9 us, inside the APS6404L's 8 us
  * maximum CE# low time (needed for its refresh). Writes have priority over reads.
  * Power-up: wait INIT_CYCLES (>150 us), then reset-enable (0x66) and reset (0x99).
+ *
+ * MISO timing (miso_late, a run-time input from the host config so either edge can be chosen
+ * on silicon): the PSRAM launches each read bit on SCK falling. The round
+ * trip (our SCK register -> TT mux -> pad -> PSRAM tCO -> pad -> TT mux -> us) must fit
+ * before we sample. miso_late = 0 samples at the next SCK rise: 1 clk budget (61 ns).
+ * miso_late = 1 samples at the next SCK fall, the same clock edge that launches the
+ * following bit: 2 clk budget (122 ns), and the old bit is still held there because
+ * the round trip is never zero. The GF180 mux delay is unpublished (sky130: up to
+ * 20 ns), so the reset default (spi_cfg CTRL[0] = 1) takes the 2 clk budget.
+ *
+ * Clock floor: a transaction keeps CE# low for 96 clocks, which must stay under the APS6404L's
+ * 8 us tCEM, so the buffer needs clk >= 12 MHz (ASIC_VERIFY.md, "Clock tolerance").
  */
 
 `default_nettype none
@@ -33,6 +45,7 @@ module audio_ring #(
     input  wire [15:0] pcm,
     input  wire        pcm_valid,
     input  wire        stream_req,   // asynchronous, from a pin
+    input  wire        miso_late,    // 1: sample MISO at SCK fall (2 clk round-trip budget)
     output wire        uart_tx,
     output wire        streaming,
     // SPI to PSRAM (mode 0)
@@ -128,9 +141,10 @@ module audio_ring #(
       if (busy) begin
         if (!spi_sck) begin
           spi_sck <= 1'b1;
-          rx      <= {rx[14:0], spi_miso};  // sample at the rising edge
+          if (!miso_late) rx <= {rx[14:0], spi_miso};  // sample at the rising edge
         end else begin
           spi_sck   <= 1'b0;
+          if (miso_late) rx <= {rx[14:0], spi_miso};   // sample at the falling edge
           sr        <= {sr[46:0], 1'b0};
           bits_left <= bits_left - 1'b1;
           if (bits_left == 1) begin

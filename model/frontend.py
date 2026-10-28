@@ -2,7 +2,10 @@
 
     src/pdm_cic.v     cic3()        PDM bits -> 16 kHz int16 PCM
     src/vad.v         vad()         PCM -> voice activity
-    src/filterbank.v  filterbank()  PCM -> (frames, 16) uint8 log2 band energies
+    filterbank()                    PCM -> (frames, 16) uint8 log2 band energies: the first,
+                                    2nd-order, full-width chip front end. src/filterbank.v now
+                                    implements Stage A's (4th order, frontend_var.LEAN5 widths)
+                                    and is checked against frontend_var._fb_one instead.
 
 Written for clarity, one sample at a time, mirroring the RTL. Every function here
 must match the RTL bit-for-bit (the cocotb tests compare against it). The fast,
@@ -16,7 +19,7 @@ from scipy.signal import iirpeak
 PDM_RATE = 1_024_000
 DECIM = 64
 PCM_RATE = PDM_RATE // DECIM  # 16 kHz
-CIC_W = 20
+CIC_W = 25  # any R up to 255 (pdm_cic.v W); R = 64 alone needs 20
 VAD_ENV_SHIFT = 6
 
 
@@ -53,8 +56,9 @@ def _wrap(v, w):
     return v - m if v >= m >> 1 else v
 
 
-def cic3(bits):
-    """3rd-order CIC, R=64, on 0/1 PDM bits -> int16 PCM at 16 kHz (matches pdm_cic.v)."""
+def cic3(bits, decim=DECIM, shift=3):
+    """3rd-order CIC, R = decim, on 0/1 PDM bits -> int16 PCM (matches pdm_cic.v; the defaults
+    are the chip's power-up setting, 1.024 MHz -> 16 kHz). PCM = sat16(c3 >> shift)."""
     w = CIC_W
     i1 = i2 = i3 = 0
     i3_d = c1_d = c2_d = 0
@@ -63,12 +67,12 @@ def cic3(bits):
         x = 1 if b else -1
         # Pipelined integrators: every stage uses the previous stage's old value.
         i1, i2, i3 = _wrap(i1 + x, w), _wrap(i2 + i1, w), _wrap(i3 + i2, w)
-        if n % DECIM == DECIM - 1:
+        if n % decim == decim - 1:
             c1 = _wrap(i3 - i3_d, w)
             c2 = _wrap(c1 - c1_d, w)
             c3 = _wrap(c2 - c2_d, w)
             i3_d, c1_d, c2_d = i3, c1, c2
-            out.append(max(-32768, min(32767, c3 >> 3)))
+            out.append(max(-32768, min(32767, c3 >> shift)))
     return np.array(out, dtype=np.int16)
 
 

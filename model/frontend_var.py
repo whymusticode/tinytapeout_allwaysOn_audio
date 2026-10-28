@@ -32,6 +32,9 @@ FE_BASE = dict(kind="chip", rate=16000, pcm_bits=16, bands=16, coef_frac=14, y_w
                acc_w=24, acc_shift=2, log_frac=3, feat_bits=8, hop=256,
                energy="abs", order=2, q_mult=1.0)  # float_iir only: |y| or y^2, 2 or 4 poles, Q scale
 F_LO = 150.0
+# The chip's widths (Stage A's front end; the "lean5" bit diet of probe_frontend.py). The band
+# count, order (4) and hop come from the Stage A search; src/filterbank.v implements this.
+LEAN5 = dict(pcm_bits=12, coef_frac=8, y_w=18, log_frac=2, acc_w=20, acc_shift=4, feat_bits=6)
 CIC_ORDER, CIC_R, PDM_RATE = 3, 64, 1_024_000
 
 
