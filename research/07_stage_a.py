@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.6
+#       jupytext_version: 1.18.1
 #   kernelspec:
 #     display_name: Python 3
 #     language: python
@@ -31,6 +31,9 @@
 # * `real_val`: AMI far-field meetings + LibriSpeech dev-clean + MUSAN speech (selection)
 # * `sim_val`: 66-word clips, held-out voices in the simulator's test mixer (reported)
 # * `real_test`: disjoint real recordings, read once per finalist (not in this notebook yet)
+#
+# Cosines are only comparable between runs with the same teacher. `word_acc` (66-word accuracy
+# of the A0 probe head trained on the student's outputs) is comparable across teachers.
 #
 # **Files.** Search space: `model/search_space.py`. Runner: `model/stage_a.py` (resumable; the GPU
 # is shared). Students: `model/students.py`. Every finished run is one line in
@@ -68,7 +71,7 @@ def ledger():
                     "size": c.get("size"), "params": r.get("params"), "bands": c.get("bands"), "order": c.get("order"),
                     "hop_ms": c.get("hop_ms"), "stride": c.get("stride"), "teacher": c.get("teacher"),
                     "frontend_ff": r.get("frontend_ff"), "cycles": r.get("cycles_per_sample"),
-                    "real_cos": b.get("real_val_cos"), "sim_cos": b.get("sim_val_cos"),
+                    "word_acc": b.get("word_acc"), "real_cos": b.get("real_val_cos"), "sim_cos": b.get("sim_val_cos"),
                     "ami": b.get("real_val_cos_ami"), "libri": b.get("real_val_cos_libri"), "musan": b.get("real_val_cos_musan"),
                     "best_step": b.get("step"), "steps": r.get("steps"), "wall_min": round((r.get("wall_s") or 0) / 60, 1)})
     return pd.DataFrame(out)
@@ -85,6 +88,14 @@ print(f"{len(L)} runs in the ledger")
 # about what a student can afford to reproduce (a 768-d output layer alone would cost ~50k
 # parameters). For reference: our TCN trained from scratch on chip features scores 52-55% on
 # the same test (research/06_probes, F2).
+#
+# **Decision (2026-10-27): whisper_tiny layer 4.** Best at 96 dims (69.6% vs 61.1% for Google's
+# speech_embedding), and an 8M-param encoder is cheap to run over all training audio. Exported by
+# `model/teach_export.py` with the encoder fed only the 1.6 s window instead of Whisper's 30 s
+# padding: 20x faster for 68.1% instead of 69.6%. Targets are the 11 steps from 0.8 s to the window
+# end. Whisper is bidirectional, so it has heard up to 0.8 s of audio after each target step that
+# the causal student has not; `word_acc` of the A1 students says whether that hurts (the first A1
+# run, b12 o4 with speech_embedding, is the reference).
 
 # %%
 if TEACH.exists():
@@ -99,9 +110,9 @@ if TEACH.exists():
 # filterbank flip-flops (`frontend_var.flipflops`; 320 FF is about one tile).
 
 # %%
-A1 = L[L.group == "A1"].sort_values(["order", "bands"])
+A1 = L[(L.group == "A1") & (L.teacher != "speech_embedding")].sort_values(["order", "bands"])
 if len(A1):
-    display(A1[["name", "status", "bands", "order", "hop_ms", "frontend_ff", "cycles", "params", "real_cos", "sim_cos",
+    display(A1[["name", "status", "teacher", "bands", "order", "hop_ms", "frontend_ff", "cycles", "params", "word_acc", "real_cos", "sim_cos",
                 "ami", "libri", "musan", "best_step", "wall_min"]])
     fig, ax = plt.subplots(1, 2, figsize=(11, 4))
     for o, g in A1[A1.hop_ms == 16].groupby("order"):

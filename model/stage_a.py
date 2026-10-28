@@ -22,6 +22,8 @@ Metric: cosine(student step, teacher embedding) on speech-active steps (audio in
 span >= 10 dB above the window's quietest 50 ms), on
   real_val  real recordings (AMI far-field, LibriSpeech dev-clean, MUSAN speech): SELECTION
   sim_val   multi_test, held-out voices in the simulator test mixer: reported
+  word_acc  66-word accuracy of a small head on the student's outputs (multi_train -> multi_test,
+            probe_teachers.head_acc), once on the best weights: comparable across teachers
 Training data is simulated only. real_test is never read here (finalists only, separately).
 Pruning: at prune_step a run continues only if its real_val cosine is in the top third of the
 runs in its group that reached that step (needs >= 3 of them).
@@ -57,18 +59,18 @@ LEAN5 = dict(pcm_bits=12, coef_frac=8, y_w=18, log_frac=2, acc_w=20, acc_shift=4
 DEFAULTS = {
     "group": "misc", "size": 50_000, "family": "tcn", "knobs": {},
     "bands": 12, "order": 4, "hop_ms": 16, "stride": 2, "weight_bits": 8,
-    "teacher": "speech_embedding", "train_sets": ["windows_telescope", "multi_train", "windows_computer", "windows_marvin",
+    "teacher": "whisper_tiny_L4", "train_sets": ["windows_telescope", "multi_train", "windows_computer", "windows_marvin",
                                                   "windows_destiny", "windows_shepherd", "windows_tourists"],
     "lr": 2e-3, "weight_decay": 1e-2, "warmup": 200, "batch": 384, "loss_cos": 0.5,
     "max_steps": 10_000, "prune_step": 3000, "seed": 0,
 }
 
 # Teacher embeddings of each audio set. speech_embedding: probe_embed.py (data/probe/emb, the
-# telescope windows are stored as "windows"); others: data/probe/teach/<teacher>/<set>.
+# telescope windows are stored as "windows"); others: teach_export.py, data/probe/distill/<teacher>/<set>.
 def teacher_path(teacher, s):
     if teacher == "speech_embedding":
         return PROBE / "emb" / ("windows" if s == "windows_telescope" else s)
-    return PROBE / "teach" / teacher / s
+    return PROBE / "distill" / teacher / s
 
 
 def teacher_ends(teacher, n):
@@ -76,7 +78,7 @@ def teacher_ends(teacher, n):
     j = np.arange(n)
     if teacher == "speech_embedding":
         return (8 * j + 75) * 160 + 400
-    return (j + 1) * 1280  # 80 ms pooled bins (probe_teachers.pool80)
+    return (j + 10) * 1280 - 1  # 80 ms pooled bins 9..19 (teach_export.py)
 
 
 # --- config / ids -------------------------------------------------------------------------
@@ -221,6 +223,22 @@ def evaluate(model, D, idx):
     return out
 
 
+def word_acc(c, model, D, idx):
+    """66-word accuracy of the probe head on the student's outputs (multi_train -> multi_test)."""
+    import probe_teachers as PT
+
+    model.eval()
+    Y = []
+    with torch.no_grad():
+        for s in ("multi_train", "multi_test"):
+            X = torch.from_numpy(features(c, s)).to(DEV)
+            Y.append(torch.cat([model(to_input(D, X[j : j + 1024])).float()[:, idx] for j in range(0, len(X), 1024)])
+                     .half().cpu().numpy())
+    model.train()
+    tags = [np.asarray(store.load(PROBE / s)["tag"]) for s in ("multi_train", "multi_test")]
+    return PT.head_acc(Y[0], tags[0], Y[1], tags[1])[0]
+
+
 def run(cfg):
     c = full(cfg)
     rid = run_id(cfg)
@@ -294,6 +312,9 @@ def run(cfg):
             save_ckpt()
             if _stop["flag"]:
                 raise Stop
+    if status == "done":
+        model.load_state_dict(torch.load(rdir / "best.pt", map_location=DEV))
+        best["word_acc"] = word_acc(c, model, D, idx)
     at_prune = next((r["real_val_cos"] for r in curve if r["step"] == c["prune_step"]), None)
     v = fe_variant(c)
     row = {"id": rid, "name": c.get("name", rid), "group": c["group"], "status": status, "date": time.strftime("%Y-%m-%d %H:%M"),
@@ -305,7 +326,7 @@ def run(cfg):
            "train_windows": D["train_windows"], "steps": step, "wall_s": round(wall),
            "cos_at_prune": at_prune, "best": best, "final": curve[-1] if curve else None}
     append_jsonl(LEDGER, row)
-    print(f"  -> {status}: {row['name']} real_val_cos {best['real_val_cos']} params {n_par}", file=sys.stderr, flush=True)
+    print(f"  -> {status}: {row['name']} real_val_cos {best['real_val_cos']} word_acc {best.get('word_acc')} params {n_par}", file=sys.stderr, flush=True)
     return row
 
 
@@ -362,6 +383,26 @@ def work(max_runs):
         n += 1
 
 
+def rescore():
+    """Add word_acc to finished ledger runs that lack it (rebuilds each student, loads best.pt)."""
+    rows = read_jsonl(LEDGER)
+    for r in rows:
+        b = r.get("best") or {}
+        if r.get("status") != "done" or "word_acc" in b or not (RUNS / r["id"] / "best.pt").exists():
+            continue
+        c = r["config"]
+        D = dataset(c)
+        D["v"] = fe_variant(c)
+        stack = max(1, 16 * c["stride"] // c["hop_ms"])
+        model, _ = S.build(c["family"], c["knobs"], D["n_in"], stack, D["D"], c["size"])
+        model = model.to(DEV)
+        model.load_state_dict(torch.load(RUNS / r["id"] / "best.pt", map_location=DEV))
+        idx = torch.from_numpy((teacher_ends(c["teacher"], D["K"]) // (c["hop_ms"] * 16)) // stack).to(DEV)
+        b["word_acc"] = word_acc(c, model, D, idx)
+        print(f"{r['name']}: word_acc {b['word_acc']}", file=sys.stderr, flush=True)
+    LEDGER.write_text("".join(json.dumps(r) + "\n" for r in rows))
+
+
 def status():
     L = read_jsonl(LEDGER)
     print(f"ledger: {len(L)} runs; pending: {len(pending())}")
@@ -372,8 +413,8 @@ def status():
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("what", choices=["add", "work", "status"])
+    ap.add_argument("what", choices=["add", "work", "status", "rescore"])
     ap.add_argument("path", nargs="?")
     ap.add_argument("--max-runs", type=int, default=10**9)
     a = ap.parse_args()
-    {"add": lambda: add(a.path), "work": lambda: work(a.max_runs), "status": status}[a.what]()
+    {"add": lambda: add(a.path), "work": lambda: work(a.max_runs), "status": status, "rescore": rescore}[a.what]()
