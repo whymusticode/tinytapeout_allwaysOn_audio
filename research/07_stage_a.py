@@ -89,13 +89,18 @@ print(f"{len(L)} runs in the ledger")
 # parameters). For reference: our TCN trained from scratch on chip features scores 52-55% on
 # the same test (research/06_probes, F2).
 #
-# **Decision (2026-10-27): whisper_tiny layer 4.** Best at 96 dims (69.6% vs 61.1% for Google's
-# speech_embedding), and an 8M-param encoder is cheap to run over all training audio. Exported by
-# `model/teach_export.py` with the encoder fed only the 1.6 s window instead of Whisper's 30 s
-# padding: 20x faster for 68.1% instead of 69.6%. Targets are the 11 steps from 0.8 s to the window
-# end. Whisper is bidirectional, so it has heard up to 0.8 s of audio after each target step that
-# the causal student has not; `word_acc` of the A1 students says whether that hurts (the first A1
-# run, b12 o4 with speech_embedding, is the reference).
+# **Decision (2026-10-28): keep Google's speech_embedding.** Whisper-tiny layer 4 is the best
+# teacher on its own at 96 dims (68.3%, encoder fed the 1.6 s window only; `model/teach_export.py`),
+# but the same 50k TCN student copies it worse:
+#
+# | teacher | teacher acc | student word_acc |
+# |---|---|---|
+# | speech_embedding | 61.1% | 52.3% |
+# | whisper_tiny L4 (bidirectional over the window) | 68.3% | 51.5% |
+# | whisper_tiny L4 causal (audio up to each step only) | 64.5% | 49.8% |
+#
+# Whisper's lead comes from audio after the target step (bidirectional) and from features a
+# 50k causal student cannot reproduce; speech_embedding was built small and causal.
 
 # %%
 if TEACH.exists():
