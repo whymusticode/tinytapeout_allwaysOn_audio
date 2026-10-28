@@ -2,6 +2,7 @@
 
   python model/teach_export.py check     # truncated vs 30 s padded encoder: 66-word accuracy
   python model/teach_export.py export    # -> data/probe/distill/whisper_tiny_L4/<set>/X.npy
+  python model/teach_export.py export --causal   # -> .../whisper_tiny_L4_causal/<set>/X.npy
 
 A0 (probe_teachers.py) picked whisper_tiny layer 4: 69.6% at PCA-96 vs 61.1% for Google's
 speech_embedding. Whisper pads every clip to 30 s, which makes 360k windows take hours; here the
@@ -12,7 +13,10 @@ Targets: the 80 ms pooled steps j = 9..19 of each 1.6 s window (ends (j + 1) * 1
 0.8 s to the window end), i.e. the 11 steps where the chip has heard >= 0.8 s, like the 11 steps
 of speech_embedding. Reduced to 96 dims by a PCA fit on the training sets (float16).
 The encoder is bidirectional within the window: step 9 has heard 0.8 s of future audio that the
-student never will (a causal-teacher option is an A5 knob).
+student never will. Result: a 50k TCN taught by it reached word_acc 0.515 vs 0.523 taught by
+speech_embedding, so the extra teacher accuracy came from the future audio.
+--causal: step j's target is computed from the window up to its end only (one encoder pass per
+step on audio[:, :(j + 1) * 1280], keep the last 80 ms bin): what a causal student can copy.
 """
 
 import argparse
@@ -31,7 +35,6 @@ ROOT = Path(__file__).resolve().parent.parent
 PROBE = ROOT / "data/probe"
 DEV = "cuda"
 HF, LAYER, NAME = "openai/whisper-tiny", 4, "whisper_tiny_L4"
-OUT = PROBE / "distill" / NAME
 FIRST = 9  # first kept 80 ms step
 TRAIN = ["windows_telescope", "multi_train", "windows_computer", "windows_marvin", "windows_destiny",
          "windows_shepherd", "windows_tourists"]
@@ -88,13 +91,19 @@ def check():
     (PROBE / "results" / f"{NAME}_truncated_check.json").write_text(json.dumps(res, indent=1))
 
 
-def export():
+def causal_layer(E, a):
+    return np.stack([E.layer(a[:, : (j + 1) * 1280])[:, j] for j in range(FIRST, 20)], 1)
+
+
+def export(causal=False):
     E = Encoder()
+    out = PROBE / "distill" / (NAME + ("_causal" if causal else ""))
     H = {}
     for s in TRAIN + EVAL:
         t0 = time.time()
         A = store.load(PROBE / s)["audio"]
-        H[s] = np.concatenate([E.layer(np.asarray(A[i : i + 8192]))[:, FIRST:] for i in range(0, len(A), 8192)])
+        f = (lambda a: causal_layer(E, a)) if causal else (lambda a: E.layer(a)[:, FIRST:])
+        H[s] = np.concatenate([f(np.asarray(A[i : i + 8192])) for i in range(0, len(A), 8192)])
         print(f"{s}: {H[s].shape} {time.time() - t0:.0f}s", file=sys.stderr, flush=True)
     rng = np.random.default_rng(0)
     fit = np.concatenate([H[s][rng.choice(len(H[s]), min(len(H[s]), 6000), replace=False)] for s in TRAIN])
@@ -107,15 +116,17 @@ def export():
     for s, h in H.items():
         y = np.concatenate([((torch.from_numpy(h[i : i + 8192].reshape(-1, D)).to(DEV).float() - mu) @ P)
                             .reshape(-1, h.shape[1], 96).half().cpu().numpy() for i in range(0, len(h), 8192)])
-        store.save(OUT / s, X=y)
-    meta = {"hf": HF, "layer": LAYER, "steps": f"80 ms bins {FIRST}..19 of 1.6 s windows, ends (j+1)*1280",
+        store.save(out / s, X=y)
+    meta = {"hf": HF, "layer": LAYER, "causal": causal, "steps": f"80 ms bins {FIRST}..19 of 1.6 s windows, ends (j+1)*1280",
             "encoder_input": "1.6 s window only (truncated positions)", "pca": "96 dims fit on train sets",
             "pca_var_kept": round(var96, 4), "sets": {s: list(h.shape) for s, h in H.items()}}
-    (OUT / "meta.json").write_text(json.dumps(meta, indent=1))
+    (out / "meta.json").write_text(json.dumps(meta, indent=1))
     print(json.dumps(meta, indent=1))
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("what", choices=["check", "export"])
-    {"check": check, "export": export}[ap.parse_args().what]()
+    ap.add_argument("--causal", action="store_true")
+    a = ap.parse_args()
+    check() if a.what == "check" else export(a.causal)

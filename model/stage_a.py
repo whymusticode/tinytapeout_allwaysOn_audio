@@ -59,7 +59,7 @@ LEAN5 = dict(pcm_bits=12, coef_frac=8, y_w=18, log_frac=2, acc_w=20, acc_shift=4
 DEFAULTS = {
     "group": "misc", "size": 50_000, "family": "tcn", "knobs": {},
     "bands": 12, "order": 4, "hop_ms": 16, "stride": 2, "weight_bits": 8,
-    "teacher": "whisper_tiny_L4", "train_sets": ["windows_telescope", "multi_train", "windows_computer", "windows_marvin",
+    "teacher": "speech_embedding", "train_sets": ["windows_telescope", "multi_train", "windows_computer", "windows_marvin",
                                                   "windows_destiny", "windows_shepherd", "windows_tourists"],
     "lr": 2e-3, "weight_decay": 1e-2, "warmup": 200, "batch": 384, "loss_cos": 0.5,
     "max_steps": 10_000, "prune_step": 3000, "seed": 0,

@@ -1,3 +1,4 @@
+{"name": "A0 whisper_tiny_L4_causal b12 o4 tcn50k", "group": "A0", "size": 50000, "family": "tcn", "knobs": {}, "bands": 12, "order": 4, "hop_ms": 16, "teacher": "whisper_tiny_L4_causal", "max_steps": 6000, "prune_step": 1000000000}
 {"name": "A1 b12 o4 h16 tcn50k", "group": "A1", "size": 50000, "bands": 12, "order": 4, "hop_ms": 16, "max_steps": 6000, "prune_step": 1000000000}
 {"name": "A1 b16 o4 h16 tcn50k", "group": "A1", "size": 50000, "bands": 16, "order": 4, "hop_ms": 16, "max_steps": 6000, "prune_step": 1000000000}
 {"name": "A1 b12 o4 h32 tcn50k", "group": "A1", "size": 50000, "bands": 12, "order": 4, "hop_ms": 32, "max_steps": 6000, "prune_step": 1000000000}
