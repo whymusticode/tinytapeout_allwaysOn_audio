@@ -22,6 +22,7 @@ yosys -q -l "$OUT/yosys.log" -p "
   ${CHP:+chparam $CHP $TOP}
   hierarchy -top $TOP
   synth -flatten -top $TOP
+  check -assert
   dfflibmap -liberty ${L}tt_025C_3v30.lib
   abc -liberty ${L}tt_025C_3v30.lib
   opt_clean -purge

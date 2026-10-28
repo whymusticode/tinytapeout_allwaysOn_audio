@@ -135,7 +135,7 @@ module tt_um_whymusticode_wakeword (
 
   // Latest frame, one code per band (the engine's input; readable over SPI at 0x20 + band).
   reg [FEAT_BITS-1:0] frame[0:N_BANDS-1];
-  integer b;
+  integer b, rb;  // separate loop variables: one is used in a clocked block, one in a combinational
   always @(posedge clk) begin
     if (!rst_n_s) begin
       for (b = 0; b < N_BANDS; b = b + 1) frame[b] <= 0;
@@ -149,7 +149,7 @@ module tt_um_whymusticode_wakeword (
   reg  [7:0] ext_rdata;
   always @(*) begin
     ext_rdata = 8'h00;
-    for (b = 0; b < N_BANDS; b = b + 1) if (ext_addr == b[4:0]) ext_rdata = {{(8 - FEAT_BITS) {1'b0}}, frame[b]};
+    for (rb = 0; rb < N_BANDS; rb = rb + 1) if (ext_addr == rb[4:0]) ext_rdata = {{(8 - FEAT_BITS) {1'b0}}, frame[rb]};
   end
 
   spi_cfg u_cfg (

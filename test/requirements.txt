@@ -2,3 +2,4 @@ pytest==8.4.2
 cocotb==2.1.0
 numpy>=2.0  # test.py checks against model/frontend.py; model/requirements.txt pins the exact version locally
 scipy>=1.11  # model/frontend.py designs the filterbank coefficients
+numba>=0.60  # model/frontend_var.py: the filterbank's bit-exact reference
