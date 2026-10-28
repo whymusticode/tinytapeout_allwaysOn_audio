@@ -5,6 +5,10 @@
 A2: each family at two sizes, a sensible first config plus seeded random draws of its knobs from
 search_space.FAMILIES (random search: with ~6 trials per family the goal is ranking families,
 not tuning them). Pruned at step 3000 within the size group.
+
+Teacher: whisper_tiny_L4 (bidirectional over the window). A0 found a 50k TCN copies it no better
+than speech_embedding (word_acc 0.515 vs 0.523); A2 asks whether another family can. Control: each
+family's first config at 100k also taught by speech_embedding (group "A2 control", not pruned).
 """
 
 import argparse
@@ -69,7 +73,7 @@ def rf_ok(family, knobs, bands, size):
     return m.body.rf_steps >= MIN_RF_STEPS
 
 
-def a2(bands, order, per_family=6, sizes=(25_000, 100_000)):
+def a2(bands, order, per_family=6, sizes=(25_000, 100_000), teacher="whisper_tiny_L4"):
     fams = list(SS.STAGE_A_FAMILIES) + ["dnn"]
     rows = []
     for size in sizes:
@@ -83,7 +87,11 @@ def a2(bands, order, per_family=6, sizes=(25_000, 100_000)):
                     if rf_ok(f, knobs, bands, size):
                         break
                 rows.append({"name": f"A2 {f} {size // 1000}k #{i}", "group": f"A2 {size // 1000}k", "size": size,
-                             "family": f, "knobs": knobs, "bands": bands, "order": order, "hop_ms": 16})
+                             "family": f, "knobs": knobs, "bands": bands, "order": order, "hop_ms": 16,
+                             "teacher": teacher})
+    for r in [r for r in rows if r["size"] == sizes[-1] and r["name"].endswith("#0")]:
+        rows.append({**r, "name": r["name"] + " speech_embedding", "group": "A2 control", "teacher": "speech_embedding",
+                     "prune_step": 10**9})
     return rows
 
 
