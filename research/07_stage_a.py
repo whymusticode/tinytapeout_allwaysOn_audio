@@ -150,9 +150,19 @@ display(L)
 # teachers); `real_cos` (real recordings vs that trial's teacher) is the sim-to-real check.
 # Seeds are not fixed; every 10 trials the incumbent is re-run with a fresh seed (`repeat`
 # rows), which measures the noise.
+#
+# **Restarted the same day at equal size.** The first (full-size) study let a config buy 2x the
+# parameters with 4-bit weights and a 64 ms stride (its top transformer had 259k params vs 109k
+# for BC-ResNet), so a win could just mean "bigger"; and short trials were scored before QAT, in
+# float. Now every trial gets the same QSPI budget: 50 KB per 32 ms output step (weights +
+# state traffic + activation spill), 8-bit weights, MACs <= 4x that (the chip's 1 MAC/clock vs
+# 2 bus bits/clock, so weight reuse is free up to 4x), always scored quantized; steps
+# 500 -> 1500 -> 4500. Plain models land at ~50k params, the A0/A1 size, so those are the
+# baseline. Winners get scaled up afterwards. The full-size journal is
+# `research/stage_a/smac_fullsize_trials.jsonl` (set `JS` to it to see it below).
 
 # %%
-JS = ROOT / "research/stage_a/smac_trials.jsonl"
+JS = ROOT / "research/stage_a/smac_50k_trials.jsonl"
 J = pd.DataFrame([{**{k: v for k, v in r.items() if k != "config"}, **{f"c.{k}": v for k, v in r["config"].items() if k != "knobs"},
                    "knobs": r["config"].get("knobs")} for r in map(json.loads, JS.read_text().splitlines())]) if JS.exists() else pd.DataFrame()
 if len(J):

@@ -1,5 +1,6 @@
-"""Stage A as one SMAC3 study: the optimizer picks front end, engine, family + knobs, teacher and
-distillation settings; the network size is derived so every trial fits the 16-tile chip.
+"""Stage A as one SMAC3 study at a fixed model size: the optimizer picks front end, family + knobs,
+teacher and distillation settings; every trial gets the same bus budget, so results compare
+architectures rather than sizes. Scale up the winners afterwards.
 
   python model/stage_a_smac.py work      # run trials until stopped; SIGTERM / Ctrl-C checkpoints and exits
   python model/stage_a_smac.py status    # best configs so far
@@ -17,15 +18,18 @@ outputs, held-out voices in the simulator test mixer; stage_a.word_acc). It is c
 teachers, which cosine is not. Real-audio cosine to the trial's teacher (real_val) and the
 simulated-val cosine are logged for every trial as the sim-to-real check.
 
-Fit by construction (derive, don't sample; search_space.py section 1):
-  front-end tiles = 5 + (flip-flops - 1,616) / 320 (the 5-tile estimate is 16 bands, 4th order)
-  on-chip bytes   = (16 - front-end tiles - 2 engine) * 40
-  QSPI bytes/step = params * weight_bits / 8 + state traffic (conv history, KV cache, recurrent
-                    state: all in PSRAM) + activation spill (2x all activations when the largest
-                    single activation vector does not fit on chip)  <= 65,536 * stride
-  MACs/step       <= 262,144 * stride
-The param target starts at min(budget(weight_bits, stride), SIZE_CAP) and shrinks by 15% until
-all of that holds. SIZE_CAP (262k) keeps a trial under ~1 h at 9000 steps on the shared GPU.
+Equal size (2026-10-28; the first, full-size study let configs buy 2x the params with 4-bit
+weights and a slower stride, so a win could just mean "bigger"; its journal is
+research/stage_a/smac_fullsize_trials.jsonl). Fixed engine: 32 ms output stride, 8-bit weights,
+QAT from 60% of MAX_STEPS, and every result is scored with quantized weights. Per output step:
+  QSPI bytes = params + state traffic (conv history, KV cache, recurrent state: all in PSRAM)
+               + activation spill (2x all activations when the largest single activation vector
+               does not fit on chip)                                          <= BUS_BYTES (50k)
+  MACs       <= MACS_PER_BYTE * BUS_BYTES: the chip does 4 MACs per weight byte the bus delivers,
+               so weight reuse (BC-ResNet over frequency, attention over the window) is free up to 4x
+  front-end tiles = 5 + (flip-flops - 1,616) / 320, and front end + 2 engine tiles < 16
+The param target starts at BUS_BYTES and shrinks by 5% until all of that holds. A plain model
+lands at ~50k params, the A0/A1 reference size (stage_a.py ledger), so those are its baseline.
 Receptive field must reach 0.8 s (the teacher's window); configs that don't are reported to SMAC
 as crashed (cost 0), so it learns to avoid them at no training cost.
 
@@ -50,8 +54,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.nn.utils.parametrize as P
-from ConfigSpace import (Categorical, Configuration, ConfigurationSpace, EqualsCondition, Float, ForbiddenAndConjunction,
-                         ForbiddenEqualsClause, Integer, OrdinalHyperparameter)
+from ConfigSpace import (Categorical, Configuration, ConfigurationSpace, EqualsCondition, Float, Integer,
+                         OrdinalHyperparameter)
 
 import frontend_var as FV
 import search_space as SS
@@ -59,18 +63,19 @@ import stage_a as SA
 import students as S
 
 ROOT = Path(__file__).resolve().parent.parent
-WORK = ROOT / "data/stage_a/smac"
+WORK = ROOT / "data/stage_a/smac_50k"
 RUNS = WORK / "runs"
 PENDING = WORK / "pending.json"
-JOURNAL = ROOT / "research/stage_a/smac_trials.jsonl"
+JOURNAL = ROOT / "research/stage_a/smac_50k_trials.jsonl"
 DEV = "cuda"
 
-MIN_STEPS, MAX_STEPS, ETA = 1000, 9000, 3
-SIZE_CAP = 262_144
+MIN_STEPS, MAX_STEPS, ETA = 500, 4500, 3  # A1's 50k TCNs flattened by ~5000 steps
+BUS_BYTES = 50_000  # per 32 ms output step
+MACS_PER_BYTE = 4   # 1 MAC per clock vs 2 QSPI bits per clock
+STRIDE, WEIGHT_BITS, QAT_START = 2, 8, 0.6
 NOISE_EVERY = 10
 MIN_RF_S = 0.8
 FE_FF_REF, FE_TILES_REF = 1616, 5.0  # lean5, 16 bands, 4th order = the 5-tile front-end estimate
-BUS_PER_FRAME, MACS_PER_FRAME = 65_536, 262_144
 
 # Family knobs not implemented in students.py are left out of the space.
 DROP = {"rnn": {"proj"}, "svdf": "all"}
@@ -99,13 +104,11 @@ def space():
     cs = ConfigurationSpace()
     # Front end: A1 settled 4th order (+3 pts word_acc at every band count, research/07_stage_a).
     cs.add([_hp("bands", SS.FRONTEND["bands"]), Categorical("hop_ms", [16, 32]),
-            Categorical("weight_bits", [8, 4]), OrdinalHyperparameter("stride", [1, 2, 4]),
             Categorical("family", FAMILIES), Categorical("teacher", TEACHERS),
             Float("loss_cos", (0.0, 1.0)), Float("lr", (3e-4, 1e-2), log=True),
             Float("weight_decay", (1e-4, 1e-1), log=True), OrdinalHyperparameter("warmup", [100, 300, 1000]),
             OrdinalHyperparameter("batch", [256, 384, 512]), OrdinalHyperparameter("grad_clip", [0.5, 1.0, 5.0]),
-            Float("aug_gain_db", (0.0, 12.0)), Float("aug_tilt", (0.0, 1.0)), Float("aug_band_mask_p", (0.0, 0.4)),
-            Float("qat_start", (0.3, 0.8))])
+            Float("aug_gain_db", (0.0, 12.0)), Float("aug_tilt", (0.0, 1.0)), Float("aug_band_mask_p", (0.0, 0.4))])
     for fam in FAMILIES:
         for k, spec in SS.FAMILIES[fam].items():
             if k in DROP.get(fam, ()):
@@ -113,17 +116,15 @@ def space():
             hp = _hp(f"{fam}.{k}", spec)
             cs.add(hp)
             cs.add(EqualsCondition(hp, cs["family"], fam))
-    # hop 32 ms cannot produce 16 ms output steps
-    cs.add(ForbiddenAndConjunction(ForbiddenEqualsClause(cs["stride"], 1), ForbiddenEqualsClause(cs["hop_ms"], 32)))
     return cs
 
 
 def BASELINE(cs):
     """The A1 reference (12 bands, 50k-class TCN, speech_embedding, stage_a DEFAULTS) as the first trial."""
-    return Configuration(cs, values={"bands": 12, "hop_ms": 16, "weight_bits": 8, "stride": 2, "family": "tcn",
+    return Configuration(cs, values={"bands": 12, "hop_ms": 16, "family": "tcn",
                                      "teacher": "speech_embedding", "loss_cos": 0.5, "lr": 2e-3, "weight_decay": 1e-2,
                                      "warmup": 300, "batch": 384, "grad_clip": 1.0, "aug_gain_db": 0.0, "aug_tilt": 0.0,
-                                     "aug_band_mask_p": 0.0, "qat_start": 0.6, "tcn.depth": 8, "tcn.kernel": 3,
+                                     "aug_band_mask_p": 0.0, "tcn.depth": 8, "tcn.kernel": 3,
                                      "tcn.dilation": "exp_cycle4", "tcn.separable": "True", "tcn.gated": "False",
                                      "tcn.norm": "bn", "tcn.expand": 1})
 
@@ -138,7 +139,8 @@ def to_cfg(conf):
             v = {"True": True, "False": False}.get(v, v) if isinstance(v, str) else v
             knobs[k.split(".", 1)[1]] = v.item() if hasattr(v, "item") else v
     c = {k: (v.item() if hasattr(v, "item") else v) for k, v in d.items() if "." not in k}
-    c.update({"knobs": knobs, "order": 4, "train_sets": SA.DEFAULTS["train_sets"]})
+    c.update({"knobs": knobs, "order": 4, "train_sets": SA.DEFAULTS["train_sets"],
+              "stride": STRIDE, "weight_bits": WEIGHT_BITS, "qat_start": QAT_START})
     return c
 
 
@@ -181,14 +183,15 @@ def hw(model, n_in, stack):
 
 
 def fit(c, n_in):
-    """Largest student of this config that fits -> (model, width, report). None if nothing fits."""
+    """Largest student of this config within the equal-size budget -> (model, width, report)."""
     v = SA.fe_variant(c)
     ff = FV.flipflops(v)
     fe_tiles = FE_TILES_REF + (ff - FE_FF_REF) / SS.TILE_BITS
     on_chip = (SS.TILES - fe_tiles - SS.ENGINE_TILES) * SS.TILE_BITS / 8
     stack = max(1, 16 * c["stride"] // c["hop_ms"])
-    target = min(SS.budget(c["weight_bits"], c["stride"]), SIZE_CAP)
-    for _ in range(20):
+    target = BUS_BYTES * 8 // c["weight_bits"]
+    mac_limit = MACS_PER_BYTE * BUS_BYTES
+    for _ in range(60):
         model, width = S.build(c["family"], c["knobs"], n_in, stack, 96, target)
         p = S.n_params(model)
         h = hw(model, n_in, stack)
@@ -197,12 +200,12 @@ def fit(c, n_in):
         macs = S.macs_per_step(model, n_in)
         rep = {"params": p, "width": width, "frontend_ff": ff, "frontend_tiles": round(fe_tiles, 2),
                "on_chip_bytes": int(on_chip), "act_max_bytes": h["act_max"], "state_bytes_per_step": h["state"],
-               "spill_bytes_per_step": spill, "bus_bytes_per_step": int(bus), "bus_limit": BUS_PER_FRAME * c["stride"],
-               "macs_per_step": macs, "mac_limit": MACS_PER_FRAME * c["stride"], "param_target": target,
+               "spill_bytes_per_step": spill, "bus_bytes_per_step": int(bus), "bus_limit": BUS_BYTES,
+               "macs_per_step": macs, "mac_limit": mac_limit, "param_target": target,
                "rf_s": round(model.body.rf_steps * 0.016 * c["stride"], 2) if math.isfinite(model.body.rf_steps) else None}
-        if bus <= BUS_PER_FRAME * c["stride"] and macs <= MACS_PER_FRAME * c["stride"] and fe_tiles + SS.ENGINE_TILES < SS.TILES:
+        if bus <= BUS_BYTES and macs <= mac_limit and fe_tiles + SS.ENGINE_TILES < SS.TILES:
             return model, width, rep
-        target = int(target * 0.85)
+        target = int(target * 0.95)
         if target < 4000:
             break
     return None, None, rep
@@ -336,11 +339,11 @@ def train(conf, budget, rep):
             save()
             if _stop["flag"]:
                 raise Stop
-    for fq in fqs:  # evaluate as the chip runs it once QAT has started
-        fq.on.fill_(float(step >= qat_at))
+    for fq in fqs:  # always score as the chip runs it (post-training quantization before QAT starts)
+        fq.on.fill_(1.0)
     m = SA.evaluate(model, D, idx)
     m["word_acc"] = SA.word_acc(c, model, D, idx)
-    return {**row, "status": "ok", "steps": step, "wall_s": round(wall), "quantized": step >= qat_at, **m}
+    return {**row, "status": "ok", "steps": step, "wall_s": round(wall), "qat": step > qat_at, **m}
 
 
 # --- SMAC loop ------------------------------------------------------------------------------
@@ -387,7 +390,7 @@ def work():
             PENDING.write_text(json.dumps({"config": {k: (v.item() if hasattr(v, "item") else v) for k, v in dict(info.config).items()},
                                            "seed": info.seed, "budget": info.budget, "kind": kind, "repeat": rep}))
         c = to_cfg(info.config)
-        print(f"{kind} {c['family']} b{c['bands']} h{c['hop_ms']} s{c['stride']} w{c['weight_bits']} {c['teacher']} "
+        print(f"{kind} {c['family']} b{c['bands']} h{c['hop_ms']} {c['teacher']} "
               f"budget {int(info.budget)}", file=sys.stderr, flush=True)
         try:
             row = train(info.config, int(info.budget), rep)
@@ -417,8 +420,8 @@ def status():
         print(f"repeats of the incumbent at {MAX_STEPS}: word_acc sd {np.std(reps, ddof=1):.4f} (n={len(reps)})")
     for r in sorted(ok, key=lambda r: -r["word_acc"])[:15]:
         c = r["config"]
-        print(f"{r['word_acc']:.4f} real {r['real_val_cos']:.3f} {c['family']:11s} b{c['bands']:<2d} h{c['hop_ms']} s{c['stride']} "
-              f"w{c['weight_bits']} {c['teacher'][:22]:22s} params {r['params']:6d} steps {r['steps']}")
+        print(f"{r['word_acc']:.4f} real {r['real_val_cos']:.3f} {c['family']:11s} b{c['bands']:<2d} h{c['hop_ms']} "
+              f"{c['teacher'][:22]:22s} params {r['params']:6d} bus {r['bus_bytes_per_step']:6d} macs {r['macs_per_step']:6d} steps {r['steps']}")
 
 
 def show_space():
