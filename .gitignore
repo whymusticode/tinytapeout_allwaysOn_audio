@@ -21,6 +21,7 @@ test/unit/__pycache__/
 *.pyc
 research/.ipynb_checkpoints/
 
-notes.md # personal notes to remember where things go
+# Personal design notes, kept out of the public repo (gitignore has no end-of-line comments)
+notes.md
 RUNNING.md
 ASIC_VERIFY.md
