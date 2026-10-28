@@ -21,4 +21,6 @@ test/unit/__pycache__/
 *.pyc
 research/.ipynb_checkpoints/
 
-notes.md # personal notes to remember where things goRUNNING.md
+notes.md # personal notes to remember where things go
+RUNNING.md
+ASIC_VERIFY.md
