@@ -33,6 +33,11 @@ on speech-bearing windows only (teacher-energy gate, so silence/music copying do
   * Guard against proxy drift: every ~10 trials, train a Stage B head on the current best
     student and check FRR still follows the cosine (it did up to ~0.76: research/06_probes).
 
+Since 2026-10-28 Stage A runs as one SMAC3 study (model/stage_a_smac.py) instead of the A1-A5
+steps below: the optimizer searches FRONTEND (4th order fixed by A1), ENGINE, the families and
+DISTILL knobs it implements, with the size derived per trial to fit the chip (not SIZES).
+A0 and A1 ran as planned (research/07_stage_a); A2 was stopped about a fifth done.
+
 Stage A plan (each step fixes what it settles before the next):
   A0 control: same student trained from scratch as a 66-word classifier (no teacher) + head,
      on the same audio. If it matches distillation, the teacher isn't what helps.

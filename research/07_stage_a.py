@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.18.1
+#       jupytext_version: 1.19.6
 #   kernelspec:
 #     display_name: Python 3
 #     language: python
@@ -137,3 +137,42 @@ if len(A1):
 
 # %%
 display(L)
+
+# %% [markdown]
+# ## The SMAC3 study (from 2026-10-28)
+#
+# The A2 grid was stopped (about a fifth done) in favour of one optimizer over everything:
+# `model/stage_a_smac.py`. SMAC3 (random forest over the conditional space, Hyperband over
+# training steps 1000 -> 3000 -> 9000) picks bands, hop, weight bits, stride, family + knobs,
+# teacher (Google's speech_embedding, Whisper-tiny L4, causal Whisper) and the training settings.
+# The size is not searched: each trial is the largest network that fits the chip's QSPI bus, MAC
+# and tile budgets, so every trial is a valid chip. Objective: `word_acc` (comparable across
+# teachers); `real_cos` (real recordings vs that trial's teacher) is the sim-to-real check.
+# Seeds are not fixed; every 10 trials the incumbent is re-run with a fresh seed (`repeat`
+# rows), which measures the noise.
+
+# %%
+JS = ROOT / "research/stage_a/smac_trials.jsonl"
+J = pd.DataFrame([{**{k: v for k, v in r.items() if k != "config"}, **{f"c.{k}": v for k, v in r["config"].items() if k != "knobs"},
+                   "knobs": r["config"].get("knobs")} for r in map(json.loads, JS.read_text().splitlines())]) if JS.exists() else pd.DataFrame()
+if len(J):
+    ok = J[J.status == "ok"]
+    print(f"{len(J)} trials, {len(ok)} trained; status counts:", J.status.value_counts().to_dict())
+    rep = ok[ok.kind == "repeat"].word_acc
+    if len(rep) > 1:
+        print(f"noise: word_acc sd of incumbent repeats = {rep.std():.4f} (n={len(rep)})")
+    cols = ["n", "kind", "budget", "word_acc", "real_val_cos", "sim_val_cos", "c.family", "c.bands", "c.hop_ms", "c.stride",
+            "c.weight_bits", "c.teacher", "params", "bus_bytes_per_step", "macs_per_step", "frontend_ff", "wall_s", "knobs"]
+    display(ok.sort_values("word_acc", ascending=False)[cols].head(20))
+    fig, ax = plt.subplots(1, 3, figsize=(15, 4))
+    for b, g in ok.groupby("budget"):
+        ax[0].plot(g.n, g.word_acc, "o", label=f"{int(b)} steps")
+        ax[1].plot(g.real_val_cos, g.word_acc, "o", label=f"{int(b)} steps")
+    ax[0].set(xlabel="trial", ylabel="word_acc", title="progress")
+    ax[1].set(xlabel="real_val cosine (own teacher)", ylabel="word_acc", title="sim word_acc vs real cosine")
+    best = ok[ok.budget == ok.budget.max()].groupby("c.family").word_acc.max().sort_values()
+    best.plot.barh(ax=ax[2], title=f"best per family at {int(ok.budget.max())} steps")
+    for a in ax[:2]:
+        a.grid(alpha=0.3)
+        a.legend()
+    plt.tight_layout()

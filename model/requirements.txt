@@ -21,3 +21,7 @@ openwakeword==0.4.0
 ai-edge-litert==2.3.0
 pymicro-features==2.0.2
 transformers==4.57.1
+# Stage A optimizer (model/stage_a_smac.py): SMAC3 multi-fidelity; its random forest is scikit-learn (no pyrfr)
+smac==2.4.1
+ConfigSpace==1.2.0
+scikit-learn==1.9.1
