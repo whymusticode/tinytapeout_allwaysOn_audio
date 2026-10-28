@@ -28,6 +28,15 @@
   "RUN_LINTER": 1,
   "LINTER_INCLUDE_PDK_MODELS": 1,
 
+  "//": "Slew/fanout repair (2026-10-28, layout experiments A-E): the resizer used dlyb delay cells as",
+  "//": "fanout buffers (slow, weak edges: 1,767 max-slew violations at ss, worst path +1.7 ns). Without",
+  "//": "them, sized at the ss corner, and repaired again after global routing: tt 0 / ss 242 slew",
+  "//": "violations, ss setup +15.4 ns, hold +0.14 ns. A 50% slew margin crashed repair_design.",
+  "RSZ_DONT_USE_CELLS": ["gf180mcu_fd_sc_mcu7t5v0__dlya_1", "gf180mcu_fd_sc_mcu7t5v0__dlya_2", "gf180mcu_fd_sc_mcu7t5v0__dlya_4", "gf180mcu_fd_sc_mcu7t5v0__dlyb_1", "gf180mcu_fd_sc_mcu7t5v0__dlyb_2", "gf180mcu_fd_sc_mcu7t5v0__dlyb_4", "gf180mcu_fd_sc_mcu7t5v0__dlyc_1", "gf180mcu_fd_sc_mcu7t5v0__dlyc_2", "gf180mcu_fd_sc_mcu7t5v0__dlyc_4"],
+  "RSZ_CORNERS": ["max_ss_125C_3v00"],
+  "RUN_POST_GRT_DESIGN_REPAIR": true,
+  "DESIGN_REPAIR_MAX_SLEW_PCT": 30,
+
   "//": "If you need a custom clock configuration, read the following documentation first:",
   "//": "https://tinytapeout.com/faq/#how-can-i-map-an-additional-external-clock-to-one-of-the-gpios",
   "CLOCK_PORT": "clk",
