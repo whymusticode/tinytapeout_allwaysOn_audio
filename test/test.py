@@ -120,12 +120,12 @@ async def test_vad(dut):
         got = np.array(got)
         assert got[:300].sum() == 0 and got[360:620].all() and got[-60:].sum() == 0
         return
-    # RTL: VAD updates on the clock after each PCM sample; compare bit-exact.
+    # RTL: the top registers PCM, and the VAD updates the clock after that; compare bit-exact.
     cic = dut.user_project.u_cic
     while len(got) < len(want_vad):
         await RisingEdge(dut.clk)
         if int(cic.pcm_valid.value):
-            await RisingEdge(dut.clk)
+            await ClockCycles(dut.clk, 2)
             await ReadOnly()
             got.append((int(dut.uo_out.value) >> 3) & 1)
     got = np.array(got)

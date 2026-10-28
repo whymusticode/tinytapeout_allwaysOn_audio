@@ -82,9 +82,20 @@ module tt_um_whymusticode_wakeword (
       .pcm_valid (mic_valid)
   );
 
-  // Host-injected PCM replaces the mic (bring-up / debug: bypasses mic and CIC).
-  wire [15:0] pcm = inject ? inj_pcm : mic_pcm;
-  wire pcm_valid = inject ? inj_valid : mic_valid;
+  // Host-injected PCM replaces the mic (bring-up / debug: bypasses mic and CIC). Registered:
+  // the select is a high-fanout net, and unregistered it ran straight into the VAD's arithmetic
+  // (-0.3 ns at the ss corner post-route).
+  reg [15:0] pcm;
+  reg        pcm_valid;
+  always @(posedge clk) begin
+    if (!rst_n_s) begin
+      pcm       <= 0;
+      pcm_valid <= 0;
+    end else begin
+      pcm       <= inject ? inj_pcm : mic_pcm;
+      pcm_valid <= inject ? inj_valid : mic_valid;
+    end
+  end
 
   wire        vad_active;
   wire [14:0] vad_env;
