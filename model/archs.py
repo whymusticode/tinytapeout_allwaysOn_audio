@@ -35,7 +35,8 @@ N_IN = 16
 FRAME_S = 0.016
 
 # --- hardware cost model --------------------------------------------------------------
-TILE_BITS = 320  # flip-flops per Tiny Tapeout tile at a routable utilisation (sky130, ~1k cells/tile)
+TILE_BITS = 320  # flip-flops per tile at a routable utilisation. Set on sky130; a gf180 tile (346x161 um) holds
+#   about the same (gf cells ~3.2x sky130 area, tile 3.1x), so the 16-tile budget carries over to the gf180 4x4
 FRONTEND_TILES = 5.0  # CIC + 16-band filterbank + VAD (filterbank alone: ~1,270 DFF + ~1,660 cells, yosys)
 ENGINE_TILES = 2.0  # QSPI controller, 8x8 MAC + 24-bit accumulator, sequencer, activation LUTs (estimate)
 QSPI_BYTES_PER_S = 16.384e6 / 2 * 4 / 8  # SCK = clk/2, 4 data lines: ~4.1 MB/s

@@ -1,6 +1,6 @@
 ![](../../workflows/gds/badge.svg) ![](../../workflows/docs/badge.svg) ![](../../workflows/test/badge.svg) ![](../../workflows/fpga/badge.svg)
 
-# Open always-on wake-word detector (Tiny Tapeout, sky130)
+# Open always-on wake-word detector (Tiny Tapeout, GF180MCU / ttgf26c)
 
 The goal is an open-source alternative to the always-on "hey Google" style hotword chips, for Linux phones, smart speakers,
 handhelds and embedded Linux. The chip listens to a PDM microphone at very low power and raises an interrupt

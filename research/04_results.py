@@ -16,8 +16,8 @@
 # %% [markdown]
 # # 04 · Results: what do 16 tiles buy?
 #
-# **The question:** how much better a detector we get from a 16-tile design (8×2, the
-# largest Tiny Tapeout slot) than from a smaller one, and which architecture uses the area
+# **The question:** how much better a detector we get from a 16-tile design (4×4, the
+# largest slot on the gf180 shuttle) than from a smaller one, and which architecture uses the area
 # best.
 #
 # **The ladder:**

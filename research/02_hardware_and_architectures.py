@@ -46,7 +46,7 @@
 #
 # | item | value | basis |
 # |---|---|---|
-# | storage per tile | ~320 flip-flops | sky130 tile 167×108 µm ≈ 1k standard cells at routable density; our yosys runs |
+# | storage per tile | ~320 flip-flops | set on a sky130 tile (161×112 µm, ≈ 1k cells at routable density). A gf180 tile (347×161 µm) holds about the same: same RTL synthesizes to 3.15–3.35× the sky130 area, and the tile is 3.1× bigger (yosys, 2026-10-28) |
 # | front end | ~5 tiles | CIC + 16-band filterbank (measured: ~1,270 FF + 1,660 cells) + VAD |
 # | classifier engine | ~2 tiles | QSPI controller, 8×8 MAC + 24-bit accumulator, sequencer, activation LUTs (estimate) |
 # | weights | **off-chip**, QSPI flash, 8-bit | read once per output step |
@@ -59,7 +59,7 @@
 # tiles. That is why the tile column doesn't grow 4× when the parameters do.
 #
 # The ladder: 5 sizes per architecture, **~4× parameters apart**, with the middle one at
-# ~16 tiles (the 8×2 maximum).
+# ~16 tiles (the 4×4 maximum on the gf180 shuttle; ~1.02–1.08× the logic the sky130 8×2 held).
 
 # %%
 import matplotlib.pyplot as plt

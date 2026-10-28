@@ -1,0 +1,1 @@
+cd ~/Projects/tinytapeout_allwaysOn_audio && . ./env.sh && python model/audio_lab.py

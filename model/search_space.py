@@ -57,6 +57,7 @@ import math
 # ======================================================================================
 # From archs.cost() (research/02_hardware_and_architectures):
 #   tiles = 5 front end + 2 engine + on-chip working bytes * 8 / 320
+#   (target: gf180 4x4. Measured gf/sky130 cell area 3.15-3.35x vs die 3.41x, so 16 holds.)
 #   weights stream from QSPI flash every output step; long state (conv history, KV cache,
 #   SVDF memories, and optionally the recurrent state) lives in PSRAM on the same QSPI bus.
 TILES = 16
